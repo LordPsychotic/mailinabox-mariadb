@@ -14,6 +14,7 @@ source setup/functions.sh # load our functions
 
 echo "$PRIMARY_HOSTNAME" > /etc/hostname
 hostname "$PRIMARY_HOSTNAME"
+grep -q "127.0.1.1" /etc/hosts && sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $(hostname)/" /etc/hosts || echo "127.0.1.1 $(hostname)" >> /etc/hosts
 
 # ### Fix permissions
 
