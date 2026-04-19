@@ -1,4 +1,9 @@
 #!/bin/bash
+
+apt-get update -y
+apt-get upgrade -y
+apt-get install python3-pymysql
+
 # This is the entry point for configuring the system.
 #####################################################
 
