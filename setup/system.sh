@@ -349,7 +349,7 @@ if ! grep -q "listen-on " /etc/bind/named.conf.options; then
 fi
 if grep -q "listen-on-v6" /etc/bind/named.conf.options; then
     # Replace the listen-on-v6 block with the correct value
-    sed -i "s|listen-on-v6 {.*}|listen-on-v6 { ::1; };|" /etc/bind/named.conf.options
+    sed -i "s|listen-on-v6 {.*}|listen-on-v6 { ::1; }|" /etc/bind/named.conf.options
 else
     # If it doesn't exist, add listen-on-v6 with ::1
     sed -i "/^}/i listen-on-v6 { ::1; };" /etc/bind/named.conf.options
