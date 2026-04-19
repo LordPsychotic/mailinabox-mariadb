@@ -4,6 +4,9 @@
 
 source setup/functions.sh # load our functions
 
+# Ensure helper scripts are executable in case mode bits are lost in checkout.
+find setup tools management -maxdepth 1 -type f -exec chmod +x {} +
+
 # Check system setup: Are we running as root on Ubuntu 18.04 on a
 # machine with enough memory? Is /tmp mounted with exec.
 # If not, this shows an error and exits.
@@ -38,7 +41,7 @@ fi
 if [ -f /etc/mailinabox.conf ]; then
 	# Run any system migrations before proceeding. Since this is a second run,
 	# we assume we have Python already installed.
-	setup/migrate.py --migrate || exit 1
+	python3 setup/migrate.py --migrate || exit 1
 
 	# Load the old .conf file to get existing configuration options loaded
 	# into variables with a DEFAULT_ prefix.
@@ -91,7 +94,7 @@ fi
 f=$STORAGE_ROOT
 while [[ $f != / ]]; do chmod a+rx "$f"; f=$(dirname "$f"); done;
 if [ ! -f "$STORAGE_ROOT/mailinabox.version" ]; then
-	setup/migrate.py --current > "$STORAGE_ROOT/mailinabox.version"
+	python3 setup/migrate.py --current > "$STORAGE_ROOT/mailinabox.version"
 	chown "$STORAGE_USER:$STORAGE_USER" "$STORAGE_ROOT/mailinabox.version"
 fi
 

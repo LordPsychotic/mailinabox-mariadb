@@ -54,6 +54,17 @@ RCM_DIR=/usr/local/lib/roundcubemail
 RCM_PLUGIN_DIR=${RCM_DIR}/plugins
 RCM_CONFIG=${RCM_DIR}/config/config.inc.php
 
+reset_roundcube_db_schema() {
+	echo "Roundcube database schema looks inconsistent. Reinitializing the Roundcube database..."
+
+	mysql --defaults-file=/etc/mysql/debian.cnf << EOF
+DROP DATABASE IF EXISTS ${ROUNDCUBE_DB_NAME};
+CREATE DATABASE ${ROUNDCUBE_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+GRANT ALL PRIVILEGES ON ${ROUNDCUBE_DB_NAME}.* TO '${ROUNDCUBE_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${ROUNDCUBE_DB_PASSWORD}';
+FLUSH PRIVILEGES;
+EOF
+}
+
 needs_update=0 #NODOC
 if [ ! -f /usr/local/lib/roundcubemail/version ]; then
 	# not installed yet #NODOC
@@ -203,7 +214,13 @@ chown -f -R root:www-data ${RCM_PLUGIN_DIR}/carddav
 chmod -R 774 ${RCM_PLUGIN_DIR}/carddav
 
 # Run Roundcube database migration script (database is created if it does not exist)
-php"$PHP_VER" ${RCM_DIR}/bin/updatedb.sh --dir ${RCM_DIR}/SQL --package roundcube
+if ! php"$PHP_VER" ${RCM_DIR}/bin/updatedb.sh --dir ${RCM_DIR}/SQL --package roundcube; then
+	reset_roundcube_db_schema
+
+	# Initialize from scratch and then ensure all package migrations are applied.
+	php"$PHP_VER" ${RCM_DIR}/bin/initdb.sh --dir ${RCM_DIR}/SQL --package roundcube
+	php"$PHP_VER" ${RCM_DIR}/bin/updatedb.sh --dir ${RCM_DIR}/SQL --package roundcube
+fi
 
 # Enable PHP modules.
 phpenmod -v "$PHP_VER" imap
