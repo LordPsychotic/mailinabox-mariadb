@@ -2,12 +2,20 @@
 # domains for which a mail account has been set up.
 ########################################################################
 
-import os.path, re, rtyaml
+import os.path, re
+import db
 
 from mailconfig import get_mail_domains
 from dns_update import get_custom_dns_config, get_dns_zones
 from ssl_certificates import get_ssl_certificates, get_domain_ssl_files, check_certificate
 from utils import shell, safe_domain_name, sort_domains
+
+
+def get_web_custom_settings(env):
+	settings = db.get_setting("web_custom_settings", default={})
+	if not isinstance(settings, dict):
+		return {}
+	return settings
 
 def get_web_domains(env, include_www_redirects=True, include_auto=True, exclude_dns_elsewhere=True):
 	# What domains should we serve HTTP(S) for?
@@ -60,15 +68,12 @@ def get_web_domains_with_root_overrides(env):
 	# Load custom settings so we can tell what domains have a redirect or proxy set up on '/',
 	# which means static hosting is not happening.
 	root_overrides = { }
-	nginx_conf_custom_fn = os.path.join(env["STORAGE_ROOT"], "www/custom.yaml")
-	if os.path.exists(nginx_conf_custom_fn):
-		with open(nginx_conf_custom_fn, encoding='utf-8') as f:
-			custom_settings = rtyaml.load(f)
-		for domain, settings in custom_settings.items():
-			for type, value in [('redirect', settings.get('redirects', {}).get('/')),
-				('proxy', settings.get('proxies', {}).get('/'))]:
-				if value:
-					root_overrides[domain] = (type, value)
+	custom_settings = get_web_custom_settings(env)
+	for domain, settings in custom_settings.items():
+		for type, value in [('redirect', settings.get('redirects', {}).get('/')),
+			('proxy', settings.get('proxies', {}).get('/'))]:
+			if value:
+				root_overrides[domain] = (type, value)
 	return root_overrides
 
 def do_web_update(env):
@@ -153,59 +158,56 @@ def make_domain_config(domain, templates, ssl_certificates, env):
 
 	# Add in any user customizations in YAML format.
 	hsts = "yes"
-	nginx_conf_custom_fn = os.path.join(env["STORAGE_ROOT"], "www/custom.yaml")
-	if os.path.exists(nginx_conf_custom_fn):
-		with open(nginx_conf_custom_fn, encoding='utf-8') as f:
-			yaml = rtyaml.load(f)
-		if domain in yaml:
-			yaml = yaml[domain]
+	custom_settings = get_web_custom_settings(env)
+	if domain in custom_settings:
+		yaml = custom_settings[domain]
 
-			# any proxy or redirect here?
-			for path, url in yaml.get("proxies", {}).items():
-				# Parse some flags in the fragment of the URL.
-				pass_http_host_header = False
-				proxy_redirect_off = False
-				frame_options_header_sameorigin = False
-				web_sockets = False
-				m = re.search(r"#(.*)$", url)
-				if m:
-					for flag in m.group(1).split(","):
-						if flag == "pass-http-host":
-							pass_http_host_header = True
-						elif flag == "no-proxy-redirect":
-							proxy_redirect_off = True
-						elif flag == "frame-options-sameorigin":
-							frame_options_header_sameorigin = True
-						elif flag == "web-sockets":
-							web_sockets = True
-					url = re.sub(r"#(.*)$", "", url)
+		# any proxy or redirect here?
+		for path, url in yaml.get("proxies", {}).items():
+			# Parse some flags in the fragment of the URL.
+			pass_http_host_header = False
+			proxy_redirect_off = False
+			frame_options_header_sameorigin = False
+			web_sockets = False
+			m = re.search(r"#(.*)$", url)
+			if m:
+				for flag in m.group(1).split(","):
+					if flag == "pass-http-host":
+						pass_http_host_header = True
+					elif flag == "no-proxy-redirect":
+						proxy_redirect_off = True
+					elif flag == "frame-options-sameorigin":
+						frame_options_header_sameorigin = True
+					elif flag == "web-sockets":
+						web_sockets = True
+				url = re.sub(r"#(.*)$", "", url)
 
-				nginx_conf_extra += f"\tlocation {path} {{"
-				nginx_conf_extra += f"\n\t\tproxy_pass {url};"
-				if proxy_redirect_off:
-					nginx_conf_extra += "\n\t\tproxy_redirect off;"
-				if pass_http_host_header:
-					nginx_conf_extra += "\n\t\tproxy_set_header Host $http_host;"
-				if frame_options_header_sameorigin:
-					nginx_conf_extra += "\n\t\tproxy_set_header X-Frame-Options SAMEORIGIN;"
-				if web_sockets:
-					nginx_conf_extra += "\n\t\tproxy_http_version 1.1;"
-					nginx_conf_extra += "\n\t\tproxy_set_header Upgrade $http_upgrade;"
-					nginx_conf_extra += "\n\t\tproxy_set_header Connection 'Upgrade';"
-				nginx_conf_extra += "\n\t\tproxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
-				nginx_conf_extra += "\n\t\tproxy_set_header X-Forwarded-Host $http_host;"
-				nginx_conf_extra += "\n\t\tproxy_set_header X-Forwarded-Proto $scheme;"
-				nginx_conf_extra += "\n\t\tproxy_set_header X-Real-IP $remote_addr;"
-				nginx_conf_extra += "\n\t}\n"
-			for path, alias in yaml.get("aliases", {}).items():
-				nginx_conf_extra += f"\tlocation {path} {{"
-				nginx_conf_extra += f"\n\t\talias {alias};"
-				nginx_conf_extra += "\n\t}\n"
-			for path, url in yaml.get("redirects", {}).items():
-				nginx_conf_extra += f"\trewrite {path} {url} permanent;\n"
+			nginx_conf_extra += f"\tlocation {path} {{"
+			nginx_conf_extra += f"\n\t\tproxy_pass {url};"
+			if proxy_redirect_off:
+				nginx_conf_extra += "\n\t\tproxy_redirect off;"
+			if pass_http_host_header:
+				nginx_conf_extra += "\n\t\tproxy_set_header Host $http_host;"
+			if frame_options_header_sameorigin:
+				nginx_conf_extra += "\n\t\tproxy_set_header X-Frame-Options SAMEORIGIN;"
+			if web_sockets:
+				nginx_conf_extra += "\n\t\tproxy_http_version 1.1;"
+				nginx_conf_extra += "\n\t\tproxy_set_header Upgrade $http_upgrade;"
+				nginx_conf_extra += "\n\t\tproxy_set_header Connection 'Upgrade';"
+			nginx_conf_extra += "\n\t\tproxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
+			nginx_conf_extra += "\n\t\tproxy_set_header X-Forwarded-Host $http_host;"
+			nginx_conf_extra += "\n\t\tproxy_set_header X-Forwarded-Proto $scheme;"
+			nginx_conf_extra += "\n\t\tproxy_set_header X-Real-IP $remote_addr;"
+			nginx_conf_extra += "\n\t}\n"
+		for path, alias in yaml.get("aliases", {}).items():
+			nginx_conf_extra += f"\tlocation {path} {{"
+			nginx_conf_extra += f"\n\t\talias {alias};"
+			nginx_conf_extra += "\n\t}\n"
+		for path, url in yaml.get("redirects", {}).items():
+			nginx_conf_extra += f"\trewrite {path} {url} permanent;\n"
 
-			# override the HSTS directive type
-			hsts = yaml.get("hsts", hsts)
+		# override the HSTS directive type
+		hsts = yaml.get("hsts", hsts)
 
 	# Add the HSTS header.
 	if hsts == "yes":

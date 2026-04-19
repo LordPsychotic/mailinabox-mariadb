@@ -4,6 +4,10 @@
 
 source setup/functions.sh # load our functions
 source /etc/mailinabox.conf # load global vars
+source /etc/mailinabox-db.conf # database credentials
+
+ROUNDCUBE_DSN="mysql://${ROUNDCUBE_DB_USER}:${ROUNDCUBE_DB_PASSWORD}@${ROUNDCUBE_DB_HOST}:${ROUNDCUBE_DB_PORT}/${ROUNDCUBE_DB_NAME}"
+MAILINABOX_DSN="mysql://${MAILINABOX_DB_USER}:${MAILINABOX_DB_PASSWORD}@${MAILINABOX_DB_HOST}:${MAILINABOX_DB_PORT}/${MAILINABOX_DB_NAME}"
 
 # ### Installing Roundcube
 
@@ -24,6 +28,7 @@ apt_install \
 	dbconfig-common \
 	php"${PHP_VER}"-cli php"${PHP_VER}"-mysql php"${PHP_VER}"-intl php"${PHP_VER}"-common php"${PHP_VER}"-curl php"${PHP_VER}"-imap \
 	php"${PHP_VER}"-gd php"${PHP_VER}"-pspell php"${PHP_VER}"-mbstring php"${PHP_VER}"-xml libjs-jquery libjs-jquery-mousewheel libmagic1
+
 
 # Install Roundcube from source if it is not already present or if it is out of date.
 # Combine the Roundcube version number with the commit hash of plugins to track
@@ -114,7 +119,7 @@ cat > $RCM_CONFIG <<EOF;
 \$config = array();
 \$config['log_dir'] = '/var/log/roundcubemail/';
 \$config['temp_dir'] = '/var/tmp/roundcubemail/';
-\$config['db_dsnw'] = 'mysql://$ROUNDCUBE_DB_USER:$ROUNDCUBE_DB_PASS@$ROUNDCUBE_DB_HOST/$ROUNDCUBE_DB_NAME';
+\$config['db_dsnw'] = '$ROUNDCUBE_DSN';
 \$config['imap_host'] = 'ssl://localhost:993';
 \$config['imap_conn_options'] = array(
   'ssl'         => array(
@@ -170,8 +175,8 @@ cat > ${RCM_PLUGIN_DIR}/carddav/config.inc.php <<EOF;
 EOF
 
 # Create writable directories.
-mkdir -p /var/log/roundcubemail /var/tmp/roundcubemail "$STORAGE_ROOT/mail/roundcube"
-chown -R www-data:www-data /var/log/roundcubemail /var/tmp/roundcubemail "$STORAGE_ROOT/mail/roundcube"
+mkdir -p /var/log/roundcubemail /var/tmp/roundcubemail
+chown -R www-data:www-data /var/log/roundcubemail /var/tmp/roundcubemail
 
 # Ensure the log file monitored by fail2ban exists, or else fail2ban can't start.
 sudo -u www-data touch /var/log/roundcubemail/errors.log
@@ -184,17 +189,13 @@ cp ${RCM_PLUGIN_DIR}/password/config.inc.php.dist \
 
 tools/editconf.py ${RCM_PLUGIN_DIR}/password/config.inc.php \
 	"\$config['password_minimum_length']=8;" \
-	"\$config['password_db_dsn']='mysql://$MAIL_DB_USER:$MAIL_DB_PASS@$MAIL_DB_HOST/$MAIL_DB_NAME';" \
+	"\$config['password_db_dsn']='$MAILINABOX_DSN';" \
 	"\$config['password_query']='UPDATE users SET password=%P WHERE email=%u';" \
 	"\$config['password_algorithm']='sha512-crypt';" \
 	"\$config['password_algorithm_prefix']='{SHA512-CRYPT}';"
 
 # so PHP can use doveadm, for the password changing plugin
 usermod -a -G dovecot www-data
-
-# Ensure the mail directory is accessible.
-chown root:www-data "$STORAGE_ROOT/mail"
-chmod 775 "$STORAGE_ROOT/mail"
 
 # Fix Carddav permissions:
 chown -f -R root:www-data ${RCM_PLUGIN_DIR}/carddav

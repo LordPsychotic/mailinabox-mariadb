@@ -72,25 +72,7 @@ EOF
 # * ldnsutils: Helper utilities for signing DNSSEC zones.
 # * openssh-client: Provides ssh-keyscan which we use to create SSHFP records.
 echo "Installing nsd (DNS server)..."
-
-# Prevent nsd from auto-starting during package installation, which can hang
-# if the network interfaces or IP addresses are not yet fully available.
-# We will start nsd ourselves after setup is complete.
-if [ ! -f /usr/sbin/nsd ]; then
-	# On first install only: temporarily disable the service auto-start
-	# so that dpkg's post-install hook does not block.
-	cat > /usr/sbin/policy-rc.d << EOF
-#!/bin/sh
-# Prevent nsd from starting during apt install
-[ "\$1" = "nsd" ] && exit 101
-exit 0
-EOF
-	chmod +x /usr/sbin/policy-rc.d
-	apt_install nsd ldnsutils openssh-client
-	rm -f /usr/sbin/policy-rc.d
-else
-	apt_install nsd ldnsutils openssh-client
-fi
+apt_install nsd ldnsutils openssh-client
 
 # Create DNSSEC signing keys.
 
@@ -167,7 +149,4 @@ chmod +x /etc/cron.daily/mailinabox-dnssec
 # Permit DNS queries on TCP/UDP in the firewall.
 
 ufw_allow domain
-
-# Start/restart nsd now that configuration and DNSSEC keys are in place.
-restart_service nsd
 

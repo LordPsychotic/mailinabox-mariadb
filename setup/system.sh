@@ -14,7 +14,7 @@ source setup/functions.sh # load our functions
 
 echo "$PRIMARY_HOSTNAME" > /etc/hostname
 hostname "$PRIMARY_HOSTNAME"
-grep -q "127.0.1.1" /etc/hosts && sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $(hostname)/" /etc/hosts || echo "127.0.1.1 $(hostname)" >> /etc/hosts
+grep -q "127.0.1.1" /etc/hosts && sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $PRIMARY_HOSTNAME/" /etc/hosts || echo "127.0.1.1 $PRIMARY_HOSTNAME" >> /etc/hosts
 
 # ### Fix permissions
 
@@ -148,7 +148,7 @@ apt_get_quiet autoremove
 # * openssh-client: provides ssh-keygen
 
 echo "Installing system packages..."
-apt_install python3 python3-dev python3-pip python3-setuptools python3-pymysql \
+apt_install python3 python3-dev python3-pip python3-setuptools \
 	netcat-openbsd wget curl git sudo coreutils bc file \
 	pollinate openssh-client unzip \
 	unattended-upgrades cron ntp fail2ban rsyslog
@@ -347,9 +347,17 @@ if ! grep -q "listen-on " /etc/bind/named.conf.options; then
 	# Add a listen-on directive if it doesn't exist inside the options block.
 	sed -i "s/^}/\n\tlisten-on { 127.0.0.1; };\n}/" /etc/bind/named.conf.options
 fi
+if ! grep -q "listen-on-v6" /etc/bind/named.conf.options; then
+    # Set listen-on-v6 to ::1
+    sed -i "s/^}/\n\tlisten-on-v6 { ::1; };\n}/" /etc/bind/named.conf.options
+fi
 if ! grep -q "max-recursion-queries " /etc/bind/named.conf.options; then
 	# Add a max-recursion-queries directive if it doesn't exist inside the options block.
 	sed -i "s/^}/\n\tmax-recursion-queries 100;\n}/" /etc/bind/named.conf.options
+fi
+if ! grep -q "forwarders" /etc/bind/named.conf.options; then
+    # Add forwarders section with Google and Cloudflare DNS
+    sed -i "/listen-on-v6 { ::1; };/a \\\n\tforwarders {\n\t\t8.8.8.8;\n\t\t1.1.1.1;\n\t};" /etc/bind/named.conf.options
 fi
 
 # First we'll disable systemd-resolved's management of resolv.conf and its stub server.

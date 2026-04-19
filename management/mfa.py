@@ -8,14 +8,14 @@ import qrcode
 from mailconfig import open_database
 
 def get_user_id(email, c):
-	c.execute('SELECT id FROM users WHERE email=%s', (email,))
+	c.execute('SELECT id FROM users WHERE email=?', (email,))
 	r = c.fetchone()
 	if not r: raise ValueError("User does not exist.")
 	return r[0]
 
 def get_mfa_state(email, env):
 	c = open_database(env)
-	c.execute('SELECT id, type, secret, mru_token, label FROM mfa WHERE user_id=%s', (get_user_id(email, c),))
+	c.execute('SELECT id, type, secret, mru_token, label FROM mfa WHERE user_id=?', (get_user_id(email, c),))
 	return [
 		{ "id": r[0], "type": r[1], "secret": r[2], "mru_token": r[3], "label": r[4] }
 		for r in c.fetchall()
@@ -48,22 +48,22 @@ def enable_mfa(email, type, secret, token, label, env):
 		raise ValueError(msg)
 
 	conn, c = open_database(env, with_connection=True)
-	c.execute('INSERT INTO mfa (user_id, type, secret, label) VALUES (%s, %s, %s, %s)', (get_user_id(email, c), type, secret, label))
+	c.execute('INSERT INTO mfa (user_id, type, secret, label) VALUES (?, ?, ?, ?)', (get_user_id(email, c), type, secret, label))
 	conn.commit()
 
 def set_mru_token(email, mfa_id, token, env):
 	conn, c = open_database(env, with_connection=True)
-	c.execute('UPDATE mfa SET mru_token=%s WHERE user_id=%s AND id=%s', (token, get_user_id(email, c), mfa_id))
+	c.execute('UPDATE mfa SET mru_token=? WHERE user_id=? AND id=?', (token, get_user_id(email, c), mfa_id))
 	conn.commit()
 
 def disable_mfa(email, mfa_id, env):
 	conn, c = open_database(env, with_connection=True)
 	if mfa_id is None:
 		# Disable all MFA for a user.
-		c.execute('DELETE FROM mfa WHERE user_id=%s', (get_user_id(email, c),))
+		c.execute('DELETE FROM mfa WHERE user_id=?', (get_user_id(email, c),))
 	else:
 		# Disable a particular MFA mode for a user.
-		c.execute('DELETE FROM mfa WHERE user_id=%s AND id=%s', (get_user_id(email, c), mfa_id))
+		c.execute('DELETE FROM mfa WHERE user_id=? AND id=?', (get_user_id(email, c), mfa_id))
 	conn.commit()
 	return c.rowcount > 0
 

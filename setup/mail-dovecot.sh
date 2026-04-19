@@ -25,7 +25,7 @@ source /etc/mailinabox.conf # load global vars
 
 echo "Installing Dovecot (IMAP server)..."
 apt_install \
-	dovecot-core dovecot-imapd dovecot-pop3d dovecot-lmtpd dovecot-mysql \
+  dovecot-core dovecot-imapd dovecot-pop3d dovecot-lmtpd dovecot-mysql \
 	dovecot-sieve dovecot-managesieved
 
 # The `dovecot-imapd`, `dovecot-pop3d`, and `dovecot-lmtpd` packages automatically

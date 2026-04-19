@@ -23,24 +23,20 @@ def save_environment(env):
     with open("/etc/mailinabox.conf", "w", encoding="utf-8") as f:
         f.writelines(f"{k}={v}\n" for k, v in env.items())
 
-# THE SETTINGS FILE AT STORAGE_ROOT/settings.yaml.
+# SETTINGS STATE IN THE MARIA DB settings TABLE.
 
 def write_settings(config, env):
-    import rtyaml
-    fn = os.path.join(env['STORAGE_ROOT'], 'settings.yaml')
-    with open(fn, "w", encoding="utf-8") as f:
-        f.write(rtyaml.dump(config))
+    # Lazy import: this module is also imported by early setup tools.
+    import db
+    db.set_setting("system", config)
 
 def load_settings(env):
-    import rtyaml
-    fn = os.path.join(env['STORAGE_ROOT'], 'settings.yaml')
-    try:
-        with open(fn, encoding="utf-8") as f:
-            config = rtyaml.load(f)
-        if not isinstance(config, dict): raise ValueError # caught below
-        return config
-    except:
-        return { }
+    # Lazy import: this module is also imported by early setup tools.
+    import db
+    config = db.get_setting("system", default={})
+    if not isinstance(config, dict):
+        return {}
+    return config
 
 # UTILITIES
 
