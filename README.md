@@ -59,8 +59,7 @@ For experts, start with a completely fresh (really, I mean it) Ubuntu 22.04 LTS 
 Clone this repository and checkout the tag corresponding to the most recent release (which you can find in the tags or releases lists on GitHub):
 
 	$ git clone https://github.com/LordPsychotic/mailinabox-mariadb.git
-	$ cd mailinabox
-	$ git checkout TAGNAME
+	$ cd mailinabox-mariadb
 
 Begin the installation.
 
