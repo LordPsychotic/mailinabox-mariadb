@@ -66,7 +66,7 @@ user_external_hash=280d24eb2a6cb56b4590af8847f925c28d8d853e
 apt-get purge -qq -y owncloud* # we used to use the package manager
 
 apt_install curl php"${PHP_VER}" php"${PHP_VER}"-fpm \
-	php"${PHP_VER}"-cli php"${PHP_VER}"-sqlite3 php"${PHP_VER}"-gd php"${PHP_VER}"-imap php"${PHP_VER}"-curl \
+	php"${PHP_VER}"-cli php"${PHP_VER}"-mysql php"${PHP_VER}"-gd php"${PHP_VER}"-imap php"${PHP_VER}"-curl \
 	php"${PHP_VER}"-dev php"${PHP_VER}"-gd php"${PHP_VER}"-xml php"${PHP_VER}"-mbstring php"${PHP_VER}"-zip php"${PHP_VER}"-apcu \
 	php"${PHP_VER}"-intl php"${PHP_VER}"-imagick php"${PHP_VER}"-gmp php"${PHP_VER}"-bcmath
 
@@ -287,7 +287,11 @@ EOF
 \$AUTOCONFIG = array (
   # storage/database
   'directory' => '$STORAGE_ROOT/owncloud',
-  'dbtype' => 'sqlite3',
+  'dbtype' => 'mysql',
+  'dbname' => '$NEXTCLOUD_DB_NAME',
+  'dbuser' => '$NEXTCLOUD_DB_USER',
+  'dbpassword' => '$NEXTCLOUD_DB_PASS',
+  'dbhost' => '$NEXTCLOUD_DB_HOST',
 
   # create an administrator account with a random password so that
   # the user does not have to enter anything on first load of Nextcloud
@@ -300,7 +304,7 @@ EOF
 	# Set permissions
 	chown -R www-data:www-data "$STORAGE_ROOT/owncloud" /usr/local/lib/owncloud
 
-	# Execute Nextcloud's setup step, which creates the Nextcloud sqlite database.
+	# Execute Nextcloud's setup step, which creates the Nextcloud MariaDB database.
 	# It also wipes it if it exists. And it updates config.php with database
 	# settings and deletes the autoconfig.php file.
 	(cd /usr/local/lib/owncloud || exit; sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/index.php;)
@@ -405,7 +409,8 @@ tools/editconf.py /etc/php/"$PHP_VER"/cli/conf.d/10-opcache.ini -c ';' \
 # This version was probably in use in Mail-in-a-Box v0.41 (February 26, 2019) and earlier.
 # We moved to v0.6.3 in 193763f8. Ignore errors - maybe there are duplicated users with the
 # correct backend already.
-sqlite3 "$STORAGE_ROOT/owncloud/owncloud.db" "UPDATE oc_users_external SET backend='127.0.0.1';" || /bin/true
+mysql -h "$NEXTCLOUD_DB_HOST" -u "$NEXTCLOUD_DB_USER" -p"$NEXTCLOUD_DB_PASS" "$NEXTCLOUD_DB_NAME" \
+	-e "UPDATE oc_users_external SET backend='127.0.0.1';" || /bin/true
 
 # Set up a general cron job for Nextcloud.
 # Also add another job for Calendar updates, per advice in the Nextcloud docs
@@ -444,7 +449,8 @@ EOF
 # But if we wanted to, we would do this:
 # ```
 # for user in $(management/cli.py user admins); do
-#	 sqlite3 $STORAGE_ROOT/owncloud/owncloud.db "INSERT OR IGNORE INTO oc_group_user VALUES ('admin', '$user')"
+#	 mysql -h "$NEXTCLOUD_DB_HOST" -u "$NEXTCLOUD_DB_USER" -p"$NEXTCLOUD_DB_PASS" "$NEXTCLOUD_DB_NAME" \
+#		 -e "INSERT IGNORE INTO oc_group_user VALUES ('admin', '$user')"
 # done
 # ```
 

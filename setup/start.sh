@@ -92,6 +92,14 @@ fi
 # tools know where to look for data. The default MTA_STS_MODE setting
 # is blank unless set by an environment variable, but see web.sh for
 # how that is interpreted.
+# Load existing DB passwords if present so re-installs keep the same credentials.
+MAIL_DB_PASS=${DEFAULT_MAIL_DB_PASS:-}
+ROUNDCUBE_DB_PASS=${DEFAULT_ROUNDCUBE_DB_PASS:-}
+NEXTCLOUD_DB_PASS=${DEFAULT_NEXTCLOUD_DB_PASS:-}
+
+# Install MariaDB and create databases/users, generating passwords if needed.
+source setup/mariadb.sh
+
 cat > /etc/mailinabox.conf << EOF;
 STORAGE_USER=$STORAGE_USER
 STORAGE_ROOT=$STORAGE_ROOT
@@ -101,6 +109,18 @@ PUBLIC_IPV6=$PUBLIC_IPV6
 PRIVATE_IP=$PRIVATE_IP
 PRIVATE_IPV6=$PRIVATE_IPV6
 MTA_STS_MODE=${DEFAULT_MTA_STS_MODE:-enforce}
+MAIL_DB_HOST=127.0.0.1
+MAIL_DB_NAME=mailinabox
+MAIL_DB_USER=mailinabox
+MAIL_DB_PASS=$MAIL_DB_PASS
+ROUNDCUBE_DB_HOST=127.0.0.1
+ROUNDCUBE_DB_NAME=roundcube
+ROUNDCUBE_DB_USER=roundcube
+ROUNDCUBE_DB_PASS=$ROUNDCUBE_DB_PASS
+NEXTCLOUD_DB_HOST=127.0.0.1
+NEXTCLOUD_DB_NAME=nextcloud
+NEXTCLOUD_DB_USER=nextcloud
+NEXTCLOUD_DB_PASS=$NEXTCLOUD_DB_PASS
 EOF
 
 # Start service configuration.

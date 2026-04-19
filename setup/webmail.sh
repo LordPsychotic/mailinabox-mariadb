@@ -22,9 +22,8 @@ source /etc/mailinabox.conf # load global vars
 echo "Installing Roundcube (webmail)..."
 apt_install \
 	dbconfig-common \
-	php"${PHP_VER}"-cli php"${PHP_VER}"-sqlite3 php"${PHP_VER}"-intl php"${PHP_VER}"-common php"${PHP_VER}"-curl php"${PHP_VER}"-imap \
-	php"${PHP_VER}"-gd php"${PHP_VER}"-pspell php"${PHP_VER}"-mbstring php"${PHP_VER}"-xml libjs-jquery libjs-jquery-mousewheel libmagic1 \
-	sqlite3
+	php"${PHP_VER}"-cli php"${PHP_VER}"-mysql php"${PHP_VER}"-intl php"${PHP_VER}"-common php"${PHP_VER}"-curl php"${PHP_VER}"-imap \
+	php"${PHP_VER}"-gd php"${PHP_VER}"-pspell php"${PHP_VER}"-mbstring php"${PHP_VER}"-xml libjs-jquery libjs-jquery-mousewheel libmagic1
 
 # Install Roundcube from source if it is not already present or if it is out of date.
 # Combine the Roundcube version number with the commit hash of plugins to track
@@ -115,7 +114,7 @@ cat > $RCM_CONFIG <<EOF;
 \$config = array();
 \$config['log_dir'] = '/var/log/roundcubemail/';
 \$config['temp_dir'] = '/var/tmp/roundcubemail/';
-\$config['db_dsnw'] = 'sqlite:///$STORAGE_ROOT/mail/roundcube/roundcube.sqlite?mode=0640';
+\$config['db_dsnw'] = 'mysql://$ROUNDCUBE_DB_USER:$ROUNDCUBE_DB_PASS@$ROUNDCUBE_DB_HOST/$ROUNDCUBE_DB_NAME';
 \$config['imap_host'] = 'ssl://localhost:993';
 \$config['imap_conn_options'] = array(
   'ssl'         => array(
@@ -185,7 +184,7 @@ cp ${RCM_PLUGIN_DIR}/password/config.inc.php.dist \
 
 tools/editconf.py ${RCM_PLUGIN_DIR}/password/config.inc.php \
 	"\$config['password_minimum_length']=8;" \
-	"\$config['password_db_dsn']='sqlite:///$STORAGE_ROOT/mail/users.sqlite';" \
+	"\$config['password_db_dsn']='mysql://$MAIL_DB_USER:$MAIL_DB_PASS@$MAIL_DB_HOST/$MAIL_DB_NAME';" \
 	"\$config['password_query']='UPDATE users SET password=%P WHERE email=%u';" \
 	"\$config['password_algorithm']='sha512-crypt';" \
 	"\$config['password_algorithm_prefix']='{SHA512-CRYPT}';"
@@ -193,12 +192,9 @@ tools/editconf.py ${RCM_PLUGIN_DIR}/password/config.inc.php \
 # so PHP can use doveadm, for the password changing plugin
 usermod -a -G dovecot www-data
 
-# set permissions so that PHP can use users.sqlite
-# could use dovecot instead of www-data, but not sure it matters
+# Ensure the mail directory is accessible.
 chown root:www-data "$STORAGE_ROOT/mail"
 chmod 775 "$STORAGE_ROOT/mail"
-chown root:www-data "$STORAGE_ROOT/mail/users.sqlite"
-chmod 664 "$STORAGE_ROOT/mail/users.sqlite"
 
 # Fix Carddav permissions:
 chown -f -R root:www-data ${RCM_PLUGIN_DIR}/carddav
@@ -207,18 +203,6 @@ chmod -R 774 ${RCM_PLUGIN_DIR}/carddav
 
 # Run Roundcube database migration script (database is created if it does not exist)
 php"$PHP_VER" ${RCM_DIR}/bin/updatedb.sh --dir ${RCM_DIR}/SQL --package roundcube
-chown www-data:www-data "$STORAGE_ROOT/mail/roundcube/roundcube.sqlite"
-chmod 664 "$STORAGE_ROOT/mail/roundcube/roundcube.sqlite"
-
-# Patch the Roundcube code to eliminate an issue that causes postfix to reject our sqlite
-# user database (see https://github.com/mail-in-a-box/mailinabox/issues/2185)
-sed -i.miabold 's/^[^#]\+.\+PRAGMA journal_mode = WAL.\+$/#&/' \
-/usr/local/lib/roundcubemail/program/lib/Roundcube/db/sqlite.php
-
-# Because Roundcube wants to set the PRAGMA we just deleted from the source, we apply it here
-# to the roundcube database (see https://github.com/roundcube/roundcubemail/issues/8035)
-# Database should exist, created by migration script
-hide_output sqlite3 "$STORAGE_ROOT/mail/roundcube/roundcube.sqlite" 'PRAGMA journal_mode=WAL;'
 
 # Enable PHP modules.
 phpenmod -v "$PHP_VER" imap

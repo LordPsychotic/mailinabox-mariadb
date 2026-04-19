@@ -52,8 +52,9 @@ def migration_3(env):
 
 def migration_4(env):
 	# Add a new column to the mail users table where we can store administrative privileges.
-	db = os.path.join(env["STORAGE_ROOT"], 'mail/users.sqlite')
-	shell("check_call", ["sqlite3", db, "ALTER TABLE users ADD privileges TEXT NOT NULL DEFAULT ''"])
+	shell("check_call", ["mysql", f"--host={env['MAIL_DB_HOST']}", f"--user={env['MAIL_DB_USER']}",
+		f"--password={env['MAIL_DB_PASS']}", env['MAIL_DB_NAME'],
+		"--execute=ALTER TABLE users ADD COLUMN privileges TEXT NOT NULL DEFAULT '' AFTER extra"])
 
 def migration_5(env):
 	# The secret key for encrypting backups was world readable. Fix here.
@@ -69,8 +70,14 @@ def migration_6(env):
 def migration_7(env):
 	# I previously wanted domain names to be stored in Unicode in the database. Now I want them
 	# to be in IDNA. Affects aliases only.
-	import sqlite3
-	conn = sqlite3.connect(os.path.join(env["STORAGE_ROOT"], "mail/users.sqlite"))
+	import pymysql
+	conn = pymysql.connect(
+		host=env["MAIL_DB_HOST"],
+		user=env["MAIL_DB_USER"],
+		password=env["MAIL_DB_PASS"],
+		database=env["MAIL_DB_NAME"],
+		charset="utf8mb4",
+	)
 
 	# Get existing alias source addresses.
 	c = conn.cursor()
@@ -85,7 +92,7 @@ def migration_7(env):
 			newemail = localpart + "@" + domainpart
 			if newemail != email:
 				c = conn.cursor()
-				c.execute("UPDATE aliases SET source=? WHERE source=?", (newemail, email))
+				c.execute("UPDATE aliases SET source=%s WHERE source=%s", (newemail, email))
 				if c.rowcount != 1: raise ValueError("Alias not found.")
 				print("Updated alias", email, "to", newemail)
 		except Exception as e:
@@ -107,8 +114,9 @@ def migration_9(env):
 	# address. This was motivated by the addition of #427 ("Reject
 	# outgoing mail if FROM does not match Login") - which introduced
 	# the notion of outbound permitted-senders.
-	db = os.path.join(env["STORAGE_ROOT"], 'mail/users.sqlite')
-	shell("check_call", ["sqlite3", db, "ALTER TABLE aliases ADD permitted_senders TEXT"])
+	shell("check_call", ["mysql", f"--host={env['MAIL_DB_HOST']}", f"--user={env['MAIL_DB_USER']}",
+		f"--password={env['MAIL_DB_PASS']}", env['MAIL_DB_NAME'],
+		"--execute=ALTER TABLE aliases ADD COLUMN permitted_senders TEXT"])
 
 def migration_10(env):
 	# Clean up the SSL certificates directory.
@@ -150,50 +158,69 @@ def migration_11(env):
 def migration_12(env):
 	# Upgrading to Carddav Roundcube plugin to version 3+, it requires the carddav_*
         # tables to be dropped.
-        # Checking that the roundcube database already exists.
-        if os.path.exists(os.path.join(env["STORAGE_ROOT"], "mail/roundcube/roundcube.sqlite")):
-            import sqlite3
-            conn = sqlite3.connect(os.path.join(env["STORAGE_ROOT"], "mail/roundcube/roundcube.sqlite"))
-            c = conn.cursor()
-            # Get a list of all the tables that begin with 'carddav_'
-            c.execute("SELECT name FROM sqlite_master WHERE type = ? AND name LIKE ?", ('table', 'carddav_%'))
-            carddav_tables = c.fetchall()
-            # If there were tables that begin with 'carddav_', drop them
-            if carddav_tables:
-                for table in carddav_tables:
-                    try:
-                        table = table[0]
-                        c = conn.cursor()
-                        dropcmd = f"DROP TABLE {table}"
-                        c.execute(dropcmd)
-                    except:
-                        print("Failed to drop table", table)
-            # Save.
-            conn.commit()
-            conn.close()
+        # Checking that the roundcube database already exists by attempting a connection.
+	try:
+		import pymysql
+		conn = pymysql.connect(
+			host=env["ROUNDCUBE_DB_HOST"],
+			user=env["ROUNDCUBE_DB_USER"],
+			password=env["ROUNDCUBE_DB_PASS"],
+			database=env["ROUNDCUBE_DB_NAME"],
+			charset="utf8mb4",
+		)
+	except Exception:
+		return  # Roundcube database not yet set up
 
-            # Delete all sessions, requiring users to login again to recreate carddav_*
-            # databases
-            conn = sqlite3.connect(os.path.join(env["STORAGE_ROOT"], "mail/roundcube/roundcube.sqlite"))
-            c = conn.cursor()
-            c.execute("delete from session;")
-            conn.commit()
-            conn.close()
+	c = conn.cursor()
+	# Get a list of all the tables that begin with 'carddav_'
+	c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name LIKE 'carddav_%%'",
+		(env["ROUNDCUBE_DB_NAME"],))
+	carddav_tables = c.fetchall()
+	# If there were tables that begin with 'carddav_', drop them
+	if carddav_tables:
+		for table in carddav_tables:
+			try:
+				table = table[0]
+				c = conn.cursor()
+				dropcmd = f"DROP TABLE `{table}`"
+				c.execute(dropcmd)
+			except Exception:
+				print("Failed to drop table", table)
+	# Save.
+	conn.commit()
+	conn.close()
+
+	# Delete all sessions, requiring users to login again to recreate carddav_*
+	# databases
+	conn = pymysql.connect(
+		host=env["ROUNDCUBE_DB_HOST"],
+		user=env["ROUNDCUBE_DB_USER"],
+		password=env["ROUNDCUBE_DB_PASS"],
+		database=env["ROUNDCUBE_DB_NAME"],
+		charset="utf8mb4",
+	)
+	c = conn.cursor()
+	c.execute("DELETE FROM session;")
+	conn.commit()
+	conn.close()
 
 def migration_13(env):
 	# Add the "mfa" table for configuring MFA for login to the control panel.
-	db = os.path.join(env["STORAGE_ROOT"], 'mail/users.sqlite')
-	shell("check_call", ["sqlite3", db, "CREATE TABLE mfa (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, type TEXT NOT NULL, secret TEXT NOT NULL, mru_token TEXT, label TEXT, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);"])
+	shell("check_call", ["mysql", f"--host={env['MAIL_DB_HOST']}", f"--user={env['MAIL_DB_USER']}",
+		f"--password={env['MAIL_DB_PASS']}", env['MAIL_DB_NAME'],
+		"""--execute=CREATE TABLE IF NOT EXISTS mfa (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, type VARCHAR(32) NOT NULL, secret VARCHAR(64) NOT NULL, mru_token VARCHAR(64), label VARCHAR(255), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"""])
 
 def migration_14(env):
 	# Add the "auto_aliases" table.
-	db = os.path.join(env["STORAGE_ROOT"], 'mail/users.sqlite')
-	shell("check_call", ["sqlite3", db, "CREATE TABLE auto_aliases (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL UNIQUE, destination TEXT NOT NULL, permitted_senders TEXT);"])
+	shell("check_call", ["mysql", f"--host={env['MAIL_DB_HOST']}", f"--user={env['MAIL_DB_USER']}",
+		f"--password={env['MAIL_DB_PASS']}", env['MAIL_DB_NAME'],
+		"""--execute=CREATE TABLE IF NOT EXISTS auto_aliases (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, source VARCHAR(255) NOT NULL UNIQUE, destination TEXT NOT NULL, permitted_senders TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"""])
 
 def migration_15(env):
 	# Add a column to the users table to store their quota limit.  Default to '0' for unlimited.
-	db = os.path.join(env["STORAGE_ROOT"], 'mail/users.sqlite')
-	shell("check_call", ["sqlite3", db, "ALTER TABLE users ADD COLUMN quota TEXT NOT NULL DEFAULT '0';"])
+	shell("check_call", ["mysql", f"--host={env['MAIL_DB_HOST']}", f"--user={env['MAIL_DB_USER']}",
+		f"--password={env['MAIL_DB_PASS']}", env['MAIL_DB_NAME'],
+		"--execute=ALTER TABLE users ADD COLUMN quota VARCHAR(32) NOT NULL DEFAULT '0';"])
 
 
 ###########################################################

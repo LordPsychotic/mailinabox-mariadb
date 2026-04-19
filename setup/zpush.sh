@@ -66,7 +66,10 @@ cp conf/zpush/backend_combined.php /usr/local/lib/z-push/backend/combined/config
 # Configure IMAP
 rm -f /usr/local/lib/z-push/backend/imap/config.php
 cp conf/zpush/backend_imap.php /usr/local/lib/z-push/backend/imap/config.php
-sed -i "s%STORAGE_ROOT%$STORAGE_ROOT%" /usr/local/lib/z-push/backend/imap/config.php
+sed -i "s%ROUNDCUBE_DB_HOST%$ROUNDCUBE_DB_HOST%" /usr/local/lib/z-push/backend/imap/config.php
+sed -i "s%ROUNDCUBE_DB_NAME%$ROUNDCUBE_DB_NAME%" /usr/local/lib/z-push/backend/imap/config.php
+sed -i "s%ROUNDCUBE_DB_USER%$ROUNDCUBE_DB_USER%" /usr/local/lib/z-push/backend/imap/config.php
+sed -i "s%ROUNDCUBE_DB_PASS%$ROUNDCUBE_DB_PASS%" /usr/local/lib/z-push/backend/imap/config.php
 
 # Configure CardDav
 rm -f /usr/local/lib/z-push/backend/carddav/config.php

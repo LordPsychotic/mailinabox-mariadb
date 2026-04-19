@@ -9,7 +9,10 @@
 # Python 3 in setup/questions.sh to validate the email
 # address entered by the user.
 
-import os, sqlite3, re
+import os, re
+
+import pymysql
+import pymysql.err
 
 import utils
 from email_validator import validate_email as validate_email_, EmailNotValidError
@@ -40,10 +43,9 @@ def validate_email(email, mode=None):
 
 	if mode == 'user':
 		# There are a lot of characters permitted in email addresses, but
-		# Dovecot's sqlite auth driver seems to get confused if there are any
-		# unusual characters in the address. Bah. Also note that since
-		# the mailbox path name is based on the email address, the address
-		# shouldn't be absurdly long and must not have a forward slash.
+		# Dovecot's MariaDB auth driver requires clean addresses. Also note
+		# that since the mailbox path name is based on the email address, the
+		# address shouldn't be absurdly long and must not have a forward slash.
 		# Our database is case sensitive (oops), which affects mail delivery
 		# (Postfix always queries in lowercase?), so also only permit lowercase
 		# letters.
@@ -91,7 +93,14 @@ def is_dcv_address(email):
 	return any(email.startswith((localpart + "@", localpart + "+")) for localpart in ("admin", "administrator", "postmaster", "hostmaster", "webmaster", "abuse"))
 
 def open_database(env, with_connection=False):
-	conn = sqlite3.connect(env["STORAGE_ROOT"] + "/mail/users.sqlite")
+	conn = pymysql.connect(
+		host=env["MAIL_DB_HOST"],
+		user=env["MAIL_DB_USER"],
+		password=env["MAIL_DB_PASS"],
+		database=env["MAIL_DB_NAME"],
+		charset="utf8mb4",
+		autocommit=False,
+	)
 	if not with_connection:
 		return conn.cursor()
 	return conn, conn.cursor()
@@ -352,9 +361,9 @@ def add_mail_user(email, pw, privs, quota, env):
 
 	# add the user to the database
 	try:
-		c.execute("INSERT INTO users (email, password, privileges, quota) VALUES (?, ?, ?, ?)",
+		c.execute("INSERT INTO users (email, password, privileges, quota) VALUES (%s, %s, %s, %s)",
 			(email, pw, "\n".join(privs), quota))
-	except sqlite3.IntegrityError:
+	except pymysql.err.IntegrityError:
 		return ("User already exists.", 400)
 
 	# write databasebefore next step
@@ -374,7 +383,7 @@ def set_mail_password(email, pw, env):
 
 	# update the database
 	conn, c = open_database(env, with_connection=True)
-	c.execute("UPDATE users SET password=? WHERE email=?", (pw, email))
+	c.execute("UPDATE users SET password=%s WHERE email=%s", (pw, email))
 	if c.rowcount != 1:
 		return (f"That's not a user ({email}).", 400)
 	conn.commit()
@@ -389,7 +398,7 @@ def hash_password(pw):
 
 def get_mail_quota(email, env):
 	_conn, c = open_database(env, with_connection=True)
-	c.execute("SELECT quota FROM users WHERE email=?", (email,))
+	c.execute("SELECT quota FROM users WHERE email=%s", (email,))
 	rows = c.fetchall()
 	if len(rows) != 1:
 		return (f"That's not a user ({email}).", 400)
@@ -403,7 +412,7 @@ def set_mail_quota(email, quota, env):
 
 	# update the database
 	conn, c = open_database(env, with_connection=True)
-	c.execute("UPDATE users SET quota=? WHERE email=?", (quota, email))
+	c.execute("UPDATE users SET quota=%s WHERE email=%s", (quota, email))
 	if c.rowcount != 1:
 		return (f"That's not a user ({email}).", 400)
 	conn.commit()
@@ -444,7 +453,7 @@ def get_mail_password(email, env):
 	# http://wiki2.dovecot.org/Authentication/PasswordSchemes
 	# update the database
 	c = open_database(env)
-	c.execute('SELECT password FROM users WHERE email=?', (email,))
+	c.execute('SELECT password FROM users WHERE email=%s', (email,))
 	rows = c.fetchall()
 	if len(rows) != 1:
 		msg = f"That's not a user ({email})."
@@ -454,7 +463,7 @@ def get_mail_password(email, env):
 def remove_mail_user(email, env):
 	# remove
 	conn, c = open_database(env, with_connection=True)
-	c.execute("DELETE FROM users WHERE email=?", (email,))
+	c.execute("DELETE FROM users WHERE email=%s", (email,))
 	if c.rowcount != 1:
 		return (f"That's not a user ({email}).", 400)
 	conn.commit()
@@ -468,7 +477,7 @@ def parse_privs(value):
 def get_mail_user_privileges(email, env, empty_on_error=False):
 	# get privs
 	c = open_database(env)
-	c.execute('SELECT privileges FROM users WHERE email=?', (email,))
+	c.execute('SELECT privileges FROM users WHERE email=%s', (email,))
 	rows = c.fetchall()
 	if len(rows) != 1:
 		if empty_on_error: return []
@@ -500,7 +509,7 @@ def add_remove_mail_user_privilege(email, priv, action, env):
 
 	# commit to database
 	conn, c = open_database(env, with_connection=True)
-	c.execute("UPDATE users SET privileges=? WHERE email=?", ("\n".join(privs), email))
+	c.execute("UPDATE users SET privileges=%s WHERE email=%s", ("\n".join(privs), email))
 	if c.rowcount != 1:
 		return ("Something went wrong.", 400)
 	conn.commit()
@@ -584,12 +593,12 @@ def add_mail_alias(address, forwards_to, permitted_senders, env, update_if_exist
 
 	conn, c = open_database(env, with_connection=True)
 	try:
-		c.execute("INSERT INTO aliases (source, destination, permitted_senders) VALUES (?, ?, ?)", (address, forwards_to, permitted_senders))
+		c.execute("INSERT INTO aliases (source, destination, permitted_senders) VALUES (%s, %s, %s)", (address, forwards_to, permitted_senders))
 		return_status = "alias added"
-	except sqlite3.IntegrityError:
+	except pymysql.err.IntegrityError:
 		if not update_if_exists:
 			return (f"Alias already exists ({address}).", 400)
-		c.execute("UPDATE aliases SET destination = ?, permitted_senders = ? WHERE source = ?", (forwards_to, permitted_senders, address))
+		c.execute("UPDATE aliases SET destination = %s, permitted_senders = %s WHERE source = %s", (forwards_to, permitted_senders, address))
 		return_status = "alias updated"
 
 	conn.commit()
@@ -605,7 +614,7 @@ def remove_mail_alias(address, env, do_kick=True):
 
 	# remove
 	conn, c = open_database(env, with_connection=True)
-	c.execute("DELETE FROM aliases WHERE source=?", (address,))
+	c.execute("DELETE FROM aliases WHERE source=%s", (address,))
 	if c.rowcount != 1:
 		return (f"That's not an alias ({address}).", 400)
 	conn.commit()
@@ -619,7 +628,7 @@ def add_auto_aliases(aliases, env):
 	conn, c = open_database(env, with_connection=True)
 	c.execute("DELETE FROM auto_aliases")
 	for source, destination in aliases.items():
-		c.execute("INSERT INTO auto_aliases (source, destination) VALUES (?, ?)", (source, destination))
+		c.execute("INSERT INTO auto_aliases (source, destination) VALUES (%s, %s)", (source, destination))
 	conn.commit()
 
 def get_system_administrator(env):
