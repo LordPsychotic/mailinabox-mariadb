@@ -84,6 +84,132 @@ address, so we're suggesting $DEFAULT_PRIMARY_HOSTNAME.
 	fi
 fi
 
+# Database deployment mode: local MariaDB or remote MariaDB.
+if [ -z "${MARIADB_MODE:-}" ]; then
+	MARIADB_MODE=$([[ -z "${DEFAULT_MARIADB_MODE:-}" ]] && echo "local" || echo "$DEFAULT_MARIADB_MODE")
+fi
+
+if [ -z "${NONINTERACTIVE:-}" ]; then
+	input_box "MariaDB Deployment" \
+"Mail-in-a-Box can either install and manage a local MariaDB instance,
+or connect to an existing remote MariaDB server.
+
+Enter one of:
+- local
+- remote
+
+Database mode:" \
+		"$MARIADB_MODE" \
+		MARIADB_MODE
+
+	if [ -z "$MARIADB_MODE" ]; then
+		# user hit ESC/cancel
+		exit
+	fi
+fi
+
+MARIADB_MODE=$(echo "$MARIADB_MODE" | tr '[:upper:]' '[:lower:]')
+
+if [[ "$MARIADB_MODE" != "local" && "$MARIADB_MODE" != "remote" ]]; then
+	echo
+	echo "Database mode must be either 'local' or 'remote'."
+	exit 1
+fi
+
+if [ "$MARIADB_MODE" = "local" ]; then
+	MAILINABOX_DB_HOST=127.0.0.1
+	MAILINABOX_DB_PORT=3306
+	MAILINABOX_DB_NAME=mailinabox
+	MAILINABOX_DB_USER=mailinabox
+
+	ROUNDCUBE_DB_HOST=127.0.0.1
+	ROUNDCUBE_DB_PORT=3306
+	ROUNDCUBE_DB_NAME=roundcube
+	ROUNDCUBE_DB_USER=roundcube
+
+	NEXTCLOUD_DB_HOST=127.0.0.1
+	NEXTCLOUD_DB_PORT=3306
+	NEXTCLOUD_DB_NAME=nextcloud
+	NEXTCLOUD_DB_USER=nextcloud
+
+	unset MAILINABOX_DB_PASSWORD ROUNDCUBE_DB_PASSWORD NEXTCLOUD_DB_PASSWORD
+else
+	# Seed defaults for remote mode from previous config if available.
+	if [ -z "${MAILINABOX_DB_HOST:-}" ]; then MAILINABOX_DB_HOST="${DEFAULT_MAILINABOX_DB_HOST:-}"; fi
+	if [ -z "${MAILINABOX_DB_PORT:-}" ]; then MAILINABOX_DB_PORT="${DEFAULT_MAILINABOX_DB_PORT:-3306}"; fi
+	if [ -z "${MAILINABOX_DB_NAME:-}" ]; then MAILINABOX_DB_NAME="${DEFAULT_MAILINABOX_DB_NAME:-mailinabox}"; fi
+	if [ -z "${MAILINABOX_DB_USER:-}" ]; then MAILINABOX_DB_USER="${DEFAULT_MAILINABOX_DB_USER:-mailinabox}"; fi
+
+	if [ -z "${ROUNDCUBE_DB_HOST:-}" ]; then ROUNDCUBE_DB_HOST="${DEFAULT_ROUNDCUBE_DB_HOST:-$MAILINABOX_DB_HOST}"; fi
+	if [ -z "${ROUNDCUBE_DB_PORT:-}" ]; then ROUNDCUBE_DB_PORT="${DEFAULT_ROUNDCUBE_DB_PORT:-$MAILINABOX_DB_PORT}"; fi
+	if [ -z "${ROUNDCUBE_DB_NAME:-}" ]; then ROUNDCUBE_DB_NAME="${DEFAULT_ROUNDCUBE_DB_NAME:-roundcube}"; fi
+	if [ -z "${ROUNDCUBE_DB_USER:-}" ]; then ROUNDCUBE_DB_USER="${DEFAULT_ROUNDCUBE_DB_USER:-roundcube}"; fi
+
+	if [ -z "${NEXTCLOUD_DB_HOST:-}" ]; then NEXTCLOUD_DB_HOST="${DEFAULT_NEXTCLOUD_DB_HOST:-$MAILINABOX_DB_HOST}"; fi
+	if [ -z "${NEXTCLOUD_DB_PORT:-}" ]; then NEXTCLOUD_DB_PORT="${DEFAULT_NEXTCLOUD_DB_PORT:-$MAILINABOX_DB_PORT}"; fi
+	if [ -z "${NEXTCLOUD_DB_NAME:-}" ]; then NEXTCLOUD_DB_NAME="${DEFAULT_NEXTCLOUD_DB_NAME:-nextcloud}"; fi
+	if [ -z "${NEXTCLOUD_DB_USER:-}" ]; then NEXTCLOUD_DB_USER="${DEFAULT_NEXTCLOUD_DB_USER:-nextcloud}"; fi
+
+	if [ -z "${NONINTERACTIVE:-}" ]; then
+		input_box "Remote MariaDB Host" "Enter the hostname or IP address of your remote MariaDB server." "$MAILINABOX_DB_HOST" MAILINABOX_DB_HOST
+		if [ -z "$MAILINABOX_DB_HOST" ]; then exit; fi
+
+		input_box "Remote MariaDB Port" "Enter the MariaDB port for your remote server." "$MAILINABOX_DB_PORT" MAILINABOX_DB_PORT
+		if [ -z "$MAILINABOX_DB_PORT" ]; then exit; fi
+
+		input_box "Mail-in-a-Box DB Name" "Enter the database name for Mail-in-a-Box core data." "$MAILINABOX_DB_NAME" MAILINABOX_DB_NAME
+		if [ -z "$MAILINABOX_DB_NAME" ]; then exit; fi
+
+		input_box "Mail-in-a-Box DB User" "Enter the database user for Mail-in-a-Box core data." "$MAILINABOX_DB_USER" MAILINABOX_DB_USER
+		if [ -z "$MAILINABOX_DB_USER" ]; then exit; fi
+
+		input_box "Mail-in-a-Box DB Password" "Enter the database password for Mail-in-a-Box core data." "${MAILINABOX_DB_PASSWORD:-}" MAILINABOX_DB_PASSWORD
+		if [ -z "$MAILINABOX_DB_PASSWORD" ]; then exit; fi
+
+		input_box "Roundcube DB Host" "Enter the remote MariaDB host for Roundcube." "$ROUNDCUBE_DB_HOST" ROUNDCUBE_DB_HOST
+		if [ -z "$ROUNDCUBE_DB_HOST" ]; then exit; fi
+
+		input_box "Roundcube DB Port" "Enter the remote MariaDB port for Roundcube." "$ROUNDCUBE_DB_PORT" ROUNDCUBE_DB_PORT
+		if [ -z "$ROUNDCUBE_DB_PORT" ]; then exit; fi
+
+		input_box "Roundcube DB Name" "Enter the database name for Roundcube." "$ROUNDCUBE_DB_NAME" ROUNDCUBE_DB_NAME
+		if [ -z "$ROUNDCUBE_DB_NAME" ]; then exit; fi
+
+		input_box "Roundcube DB User" "Enter the database user for Roundcube." "$ROUNDCUBE_DB_USER" ROUNDCUBE_DB_USER
+		if [ -z "$ROUNDCUBE_DB_USER" ]; then exit; fi
+
+		input_box "Roundcube DB Password" "Enter the database password for Roundcube." "${ROUNDCUBE_DB_PASSWORD:-}" ROUNDCUBE_DB_PASSWORD
+		if [ -z "$ROUNDCUBE_DB_PASSWORD" ]; then exit; fi
+
+		input_box "Nextcloud DB Host" "Enter the remote MariaDB host for Nextcloud." "$NEXTCLOUD_DB_HOST" NEXTCLOUD_DB_HOST
+		if [ -z "$NEXTCLOUD_DB_HOST" ]; then exit; fi
+
+		input_box "Nextcloud DB Port" "Enter the remote MariaDB port for Nextcloud." "$NEXTCLOUD_DB_PORT" NEXTCLOUD_DB_PORT
+		if [ -z "$NEXTCLOUD_DB_PORT" ]; then exit; fi
+
+		input_box "Nextcloud DB Name" "Enter the database name for Nextcloud." "$NEXTCLOUD_DB_NAME" NEXTCLOUD_DB_NAME
+		if [ -z "$NEXTCLOUD_DB_NAME" ]; then exit; fi
+
+		input_box "Nextcloud DB User" "Enter the database user for Nextcloud." "$NEXTCLOUD_DB_USER" NEXTCLOUD_DB_USER
+		if [ -z "$NEXTCLOUD_DB_USER" ]; then exit; fi
+
+		input_box "Nextcloud DB Password" "Enter the database password for Nextcloud." "${NEXTCLOUD_DB_PASSWORD:-}" NEXTCLOUD_DB_PASSWORD
+		if [ -z "$NEXTCLOUD_DB_PASSWORD" ]; then exit; fi
+	fi
+
+	for required in \
+		MAILINABOX_DB_HOST MAILINABOX_DB_PORT MAILINABOX_DB_NAME MAILINABOX_DB_USER MAILINABOX_DB_PASSWORD \
+		ROUNDCUBE_DB_HOST ROUNDCUBE_DB_PORT ROUNDCUBE_DB_NAME ROUNDCUBE_DB_USER ROUNDCUBE_DB_PASSWORD \
+		NEXTCLOUD_DB_HOST NEXTCLOUD_DB_PORT NEXTCLOUD_DB_NAME NEXTCLOUD_DB_USER NEXTCLOUD_DB_PASSWORD
+	do
+		if [ -z "${!required:-}" ]; then
+			echo
+			echo "Remote MariaDB mode requires $required."
+			exit 1
+		fi
+	done
+fi
+
 # If the machine is behind a NAT, inside a VM, etc., it may not know
 # its IP address on the public network / the Internet. Ask the Internet
 # and possibly confirm with user.
@@ -209,5 +335,9 @@ if [ "$PRIVATE_IPV6" != "$PUBLIC_IPV6" ]; then
 fi
 if [ -f /usr/bin/git ] && [ -d .git ]; then
 	echo "Mail-in-a-Box Version: $(git describe --always)"
+fi
+echo "MariaDB Mode: $MARIADB_MODE"
+if [ "$MARIADB_MODE" = "remote" ]; then
+	echo "Remote MariaDB (core): $MAILINABOX_DB_HOST:$MAILINABOX_DB_PORT/$MAILINABOX_DB_NAME"
 fi
 echo

@@ -46,6 +46,9 @@ if [ -f /etc/mailinabox.conf ]; then
 	# Load the old .conf file to get existing configuration options loaded
 	# into variables with a DEFAULT_ prefix.
 	cat /etc/mailinabox.conf | sed s/^/DEFAULT_/ > /tmp/mailinabox.prev.conf
+	if [ -f /etc/mailinabox-db.conf ]; then
+		grep -Ev '(^[[:space:]]*$|^[[:space:]]*#|_PASSWORD=)' /etc/mailinabox-db.conf | sed s/^/DEFAULT_/ >> /tmp/mailinabox.prev.conf || true
+	fi
 	source /tmp/mailinabox.prev.conf
 	rm -f /tmp/mailinabox.prev.conf
 else
@@ -112,9 +115,19 @@ PRIVATE_IP=$PRIVATE_IP
 PRIVATE_IPV6=$PRIVATE_IPV6
 MTA_STS_MODE=${DEFAULT_MTA_STS_MODE:-enforce}
 USE_MARIADB=1
-MAILINABOX_DB_HOST=127.0.0.1
-MAILINABOX_DB_PORT=3306
-MAILINABOX_DB_NAME=mailinabox
+MARIADB_MODE=$MARIADB_MODE
+MAILINABOX_DB_HOST=$MAILINABOX_DB_HOST
+MAILINABOX_DB_PORT=$MAILINABOX_DB_PORT
+MAILINABOX_DB_NAME=$MAILINABOX_DB_NAME
+MAILINABOX_DB_USER=$MAILINABOX_DB_USER
+ROUNDCUBE_DB_HOST=$ROUNDCUBE_DB_HOST
+ROUNDCUBE_DB_PORT=$ROUNDCUBE_DB_PORT
+ROUNDCUBE_DB_NAME=$ROUNDCUBE_DB_NAME
+ROUNDCUBE_DB_USER=$ROUNDCUBE_DB_USER
+NEXTCLOUD_DB_HOST=$NEXTCLOUD_DB_HOST
+NEXTCLOUD_DB_PORT=$NEXTCLOUD_DB_PORT
+NEXTCLOUD_DB_NAME=$NEXTCLOUD_DB_NAME
+NEXTCLOUD_DB_USER=$NEXTCLOUD_DB_USER
 EOF
 
 # Start service configuration.

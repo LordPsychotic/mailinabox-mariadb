@@ -12,10 +12,67 @@ source setup/functions.sh # load our functions
 # All variables we need (MAIL_DB_PASS, etc.) are already exported
 # by the calling script (start.sh).
 
+if [ -f /etc/mailinabox.conf ]; then
+	source /etc/mailinabox.conf
+fi
+
 DB_CONFIG_FILE=/etc/mailinabox-db.conf
 
 if [ -f "$DB_CONFIG_FILE" ]; then
 	source "$DB_CONFIG_FILE"
+fi
+
+MARIADB_MODE=${MARIADB_MODE:-local}
+
+if [ "$MARIADB_MODE" = "remote" ]; then
+	echo "Using remote MariaDB configuration..."
+
+	# Ensure mysql client is present for connectivity checks and schema initialization.
+	apt_install mariadb-client
+
+	for required in \
+		MAILINABOX_DB_HOST MAILINABOX_DB_PORT MAILINABOX_DB_NAME MAILINABOX_DB_USER MAILINABOX_DB_PASSWORD \
+		ROUNDCUBE_DB_HOST ROUNDCUBE_DB_PORT ROUNDCUBE_DB_NAME ROUNDCUBE_DB_USER ROUNDCUBE_DB_PASSWORD \
+		NEXTCLOUD_DB_HOST NEXTCLOUD_DB_PORT NEXTCLOUD_DB_NAME NEXTCLOUD_DB_USER NEXTCLOUD_DB_PASSWORD
+	do
+		if [ -z "${!required:-}" ]; then
+			echo "Missing remote MariaDB setting: $required"
+			exit 1
+		fi
+	done
+
+	# Validate each configured database connection.
+	MYSQL_PWD="$MAILINABOX_DB_PASSWORD" mysql -h "$MAILINABOX_DB_HOST" -P "$MAILINABOX_DB_PORT" -u "$MAILINABOX_DB_USER" "$MAILINABOX_DB_NAME" -e "SELECT 1" > /dev/null
+	MYSQL_PWD="$ROUNDCUBE_DB_PASSWORD" mysql -h "$ROUNDCUBE_DB_HOST" -P "$ROUNDCUBE_DB_PORT" -u "$ROUNDCUBE_DB_USER" "$ROUNDCUBE_DB_NAME" -e "SELECT 1" > /dev/null
+	MYSQL_PWD="$NEXTCLOUD_DB_PASSWORD" mysql -h "$NEXTCLOUD_DB_HOST" -P "$NEXTCLOUD_DB_PORT" -u "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" -e "SELECT 1" > /dev/null
+
+	# Initialize (or update) the Mail-in-a-Box schema on the remote application database.
+	MYSQL_PWD="$MAILINABOX_DB_PASSWORD" mysql -h "$MAILINABOX_DB_HOST" -P "$MAILINABOX_DB_PORT" -u "$MAILINABOX_DB_USER" "$MAILINABOX_DB_NAME" < "$PWD/setup/mailinabox-schema.sql"
+
+	cat > "$DB_CONFIG_FILE" << EOF
+MAILINABOX_DB_HOST=$MAILINABOX_DB_HOST
+MAILINABOX_DB_PORT=$MAILINABOX_DB_PORT
+MAILINABOX_DB_NAME=$MAILINABOX_DB_NAME
+MAILINABOX_DB_USER=$MAILINABOX_DB_USER
+MAILINABOX_DB_PASSWORD=$MAILINABOX_DB_PASSWORD
+ROUNDCUBE_DB_HOST=$ROUNDCUBE_DB_HOST
+ROUNDCUBE_DB_PORT=$ROUNDCUBE_DB_PORT
+ROUNDCUBE_DB_NAME=$ROUNDCUBE_DB_NAME
+ROUNDCUBE_DB_USER=$ROUNDCUBE_DB_USER
+ROUNDCUBE_DB_PASSWORD=$ROUNDCUBE_DB_PASSWORD
+NEXTCLOUD_DB_HOST=$NEXTCLOUD_DB_HOST
+NEXTCLOUD_DB_PORT=$NEXTCLOUD_DB_PORT
+NEXTCLOUD_DB_NAME=$NEXTCLOUD_DB_NAME
+NEXTCLOUD_DB_USER=$NEXTCLOUD_DB_USER
+NEXTCLOUD_DB_PASSWORD=$NEXTCLOUD_DB_PASSWORD
+EOF
+	chmod 600 "$DB_CONFIG_FILE"
+
+	export MAIL_DB_PASS=$MAILINABOX_DB_PASSWORD
+	export ROUNDCUBE_DB_PASS=$ROUNDCUBE_DB_PASSWORD
+	export NEXTCLOUD_DB_PASS=$NEXTCLOUD_DB_PASSWORD
+
+	exit 0
 fi
 
 echo "Installing MariaDB (database server)..."
