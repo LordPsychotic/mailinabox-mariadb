@@ -1,9 +1,5 @@
 #!/bin/bash
 
-apt-get update -y
-apt-get upgrade -y
-apt-get install python3-pymysql -y
-
 # This is the entry point for configuring the system.
 #####################################################
 
@@ -126,8 +122,8 @@ NEXTCLOUD_DB_PASS=$NEXTCLOUD_DB_PASS
 EOF
 
 # Start service configuration.
-source setup/mariadb.sh
 source setup/system.sh
+source setup/mariadb.sh
 source setup/ssl.sh
 source setup/dns.sh
 source setup/mail-postfix.sh
