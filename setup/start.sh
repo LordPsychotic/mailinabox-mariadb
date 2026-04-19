@@ -102,9 +102,6 @@ MAIL_DB_PASS=${DEFAULT_MAIL_DB_PASS:-}
 ROUNDCUBE_DB_PASS=${DEFAULT_ROUNDCUBE_DB_PASS:-}
 NEXTCLOUD_DB_PASS=${DEFAULT_NEXTCLOUD_DB_PASS:-}
 
-# Install MariaDB and create databases/users, generating passwords if needed.
-source setup/mariadb.sh
-
 cat > /etc/mailinabox.conf << EOF;
 STORAGE_USER=$STORAGE_USER
 STORAGE_ROOT=$STORAGE_ROOT
@@ -129,6 +126,7 @@ NEXTCLOUD_DB_PASS=$NEXTCLOUD_DB_PASS
 EOF
 
 # Start service configuration.
+source setup/mariadb.sh
 source setup/system.sh
 source setup/ssl.sh
 source setup/dns.sh
