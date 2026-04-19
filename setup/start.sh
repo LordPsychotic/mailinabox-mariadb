@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # This is the entry point for configuring the system.
 #####################################################
 
@@ -32,7 +31,21 @@ export NCURSES_NO_UTF8_ACS=1
 if [ -f /etc/mailinabox.conf ]; then
 	# Run any system migrations before proceeding. Since this is a second run,
 	# we assume we have Python already installed.
-	setup/migrate.py --migrate || exit 1
+
+	# Ensure python3-pymysql is available system-wide for migrate.py
+	# (which runs under /usr/bin/python3 and may need pymysql for DB migrations).
+	if ! python3 -c 'import pymysql' 2>/dev/null; then
+		apt-get -qq update
+		apt-get -qq -y install python3-pymysql
+	fi
+
+	# Use the virtualenv Python if it exists (has pymysql installed),
+	# otherwise fall back to system Python.
+	if [ -x /usr/local/lib/mailinabox/env/bin/python3 ]; then
+		/usr/local/lib/mailinabox/env/bin/python3 setup/migrate.py --migrate || exit 1
+	else
+		setup/migrate.py --migrate || exit 1
+	fi
 
 	# Load the old .conf file to get existing configuration options loaded
 	# into variables with a DEFAULT_ prefix.
