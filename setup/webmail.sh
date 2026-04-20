@@ -57,6 +57,22 @@ RCM_CONFIG=${RCM_DIR}/config/config.inc.php
 reset_roundcube_db_schema() {
 	echo "Roundcube database schema looks inconsistent. Reinitializing the Roundcube database..."
 
+	if [ "${MARIADB_MODE:-local}" = "remote" ]; then
+		set +e
+		MYSQL_PWD="$ROUNDCUBE_DB_PASSWORD" mysql --protocol=TCP --connect-timeout=10 -h "$ROUNDCUBE_DB_HOST" -P "$ROUNDCUBE_DB_PORT" -u "$ROUNDCUBE_DB_USER" << EOF
+DROP DATABASE IF EXISTS \`$ROUNDCUBE_DB_NAME\`;
+CREATE DATABASE \`$ROUNDCUBE_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+EOF
+		E=$?
+		set -e
+		if [ $E -ne 0 ]; then
+			echo "Failed to reinitialize remote Roundcube database at $ROUNDCUBE_DB_HOST:$ROUNDCUBE_DB_PORT."
+			echo "Ensure '$ROUNDCUBE_DB_USER' has permission to drop/create '$ROUNDCUBE_DB_NAME'."
+			exit 1
+		fi
+		return
+	fi
+
 	mysql --defaults-file=/etc/mysql/debian.cnf << EOF
 DROP DATABASE IF EXISTS ${ROUNDCUBE_DB_NAME};
 CREATE DATABASE ${ROUNDCUBE_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

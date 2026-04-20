@@ -18,14 +18,73 @@ fi
 
 DB_CONFIG_FILE=/etc/mailinabox-db.conf
 
-if [ -f "$DB_CONFIG_FILE" ]; then
-	source "$DB_CONFIG_FILE"
-fi
+write_db_config_file() {
+	{
+		printf 'MAILINABOX_DB_HOST=%q\n' "$MAILINABOX_DB_HOST"
+		printf 'MAILINABOX_DB_PORT=%q\n' "$MAILINABOX_DB_PORT"
+		printf 'MAILINABOX_DB_NAME=%q\n' "$MAILINABOX_DB_NAME"
+		printf 'MAILINABOX_DB_USER=%q\n' "$MAILINABOX_DB_USER"
+		printf 'MAILINABOX_DB_PASSWORD=%q\n' "$MAILINABOX_DB_PASSWORD"
+		printf 'ROUNDCUBE_DB_HOST=%q\n' "$ROUNDCUBE_DB_HOST"
+		printf 'ROUNDCUBE_DB_PORT=%q\n' "$ROUNDCUBE_DB_PORT"
+		printf 'ROUNDCUBE_DB_NAME=%q\n' "$ROUNDCUBE_DB_NAME"
+		printf 'ROUNDCUBE_DB_USER=%q\n' "$ROUNDCUBE_DB_USER"
+		printf 'ROUNDCUBE_DB_PASSWORD=%q\n' "$ROUNDCUBE_DB_PASSWORD"
+		printf 'NEXTCLOUD_DB_HOST=%q\n' "$NEXTCLOUD_DB_HOST"
+		printf 'NEXTCLOUD_DB_PORT=%q\n' "$NEXTCLOUD_DB_PORT"
+		printf 'NEXTCLOUD_DB_NAME=%q\n' "$NEXTCLOUD_DB_NAME"
+		printf 'NEXTCLOUD_DB_USER=%q\n' "$NEXTCLOUD_DB_USER"
+		printf 'NEXTCLOUD_DB_PASSWORD=%q\n' "$NEXTCLOUD_DB_PASSWORD"
+	} > "$DB_CONFIG_FILE"
+	chmod 600 "$DB_CONFIG_FILE"
+}
+
+check_remote_db_connection() {
+	local label="$1"
+	local host="$2"
+	local port="$3"
+	local user="$4"
+	local pass="$5"
+	local dbname="$6"
+
+	if ! MYSQL_PWD="$pass" mysql --protocol=TCP --connect-timeout=10 -h "$host" -P "$port" -u "$user" "$dbname" -e "SELECT 1" > /dev/null 2>&1; then
+		echo "Failed to connect to remote MariaDB for $label at $host:$port (database '$dbname', user '$user')."
+		exit 1
+	fi
+}
 
 MARIADB_MODE=${MARIADB_MODE:-local}
 
+case "$MARIADB_MODE" in
+	local|remote)
+		;;
+	*)
+		echo "Invalid MARIADB_MODE '$MARIADB_MODE'. Expected 'local' or 'remote'."
+		exit 1
+		;;
+esac
+
 if [ "$MARIADB_MODE" = "remote" ]; then
 	echo "Using remote MariaDB configuration..."
+
+	# Keep values provided by setup/questions, and only use /etc/mailinabox-db.conf as fallback.
+	declare -A REMOTE_DB_PRESET
+	for var in \
+		MAILINABOX_DB_HOST MAILINABOX_DB_PORT MAILINABOX_DB_NAME MAILINABOX_DB_USER MAILINABOX_DB_PASSWORD \
+		ROUNDCUBE_DB_HOST ROUNDCUBE_DB_PORT ROUNDCUBE_DB_NAME ROUNDCUBE_DB_USER ROUNDCUBE_DB_PASSWORD \
+		NEXTCLOUD_DB_HOST NEXTCLOUD_DB_PORT NEXTCLOUD_DB_NAME NEXTCLOUD_DB_USER NEXTCLOUD_DB_PASSWORD
+	do
+		if [ "${!var+x}" = "x" ]; then
+			REMOTE_DB_PRESET["$var"]="${!var}"
+		fi
+	done
+
+	if [ -f "$DB_CONFIG_FILE" ]; then
+		source "$DB_CONFIG_FILE"
+		for var in "${!REMOTE_DB_PRESET[@]}"; do
+			printf -v "$var" '%s' "${REMOTE_DB_PRESET[$var]}"
+		done
+	fi
 
 	# Ensure mysql client is present for connectivity checks and schema initialization.
 	apt_install mariadb-client
@@ -42,31 +101,17 @@ if [ "$MARIADB_MODE" = "remote" ]; then
 	done
 
 	# Validate each configured database connection.
-	MYSQL_PWD="$MAILINABOX_DB_PASSWORD" mysql -h "$MAILINABOX_DB_HOST" -P "$MAILINABOX_DB_PORT" -u "$MAILINABOX_DB_USER" "$MAILINABOX_DB_NAME" -e "SELECT 1" > /dev/null
-	MYSQL_PWD="$ROUNDCUBE_DB_PASSWORD" mysql -h "$ROUNDCUBE_DB_HOST" -P "$ROUNDCUBE_DB_PORT" -u "$ROUNDCUBE_DB_USER" "$ROUNDCUBE_DB_NAME" -e "SELECT 1" > /dev/null
-	MYSQL_PWD="$NEXTCLOUD_DB_PASSWORD" mysql -h "$NEXTCLOUD_DB_HOST" -P "$NEXTCLOUD_DB_PORT" -u "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" -e "SELECT 1" > /dev/null
+	check_remote_db_connection "Mail-in-a-Box" "$MAILINABOX_DB_HOST" "$MAILINABOX_DB_PORT" "$MAILINABOX_DB_USER" "$MAILINABOX_DB_PASSWORD" "$MAILINABOX_DB_NAME"
+	check_remote_db_connection "Roundcube" "$ROUNDCUBE_DB_HOST" "$ROUNDCUBE_DB_PORT" "$ROUNDCUBE_DB_USER" "$ROUNDCUBE_DB_PASSWORD" "$ROUNDCUBE_DB_NAME"
+	check_remote_db_connection "Nextcloud" "$NEXTCLOUD_DB_HOST" "$NEXTCLOUD_DB_PORT" "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_PASSWORD" "$NEXTCLOUD_DB_NAME"
 
 	# Initialize (or update) the Mail-in-a-Box schema on the remote application database.
-	MYSQL_PWD="$MAILINABOX_DB_PASSWORD" mysql -h "$MAILINABOX_DB_HOST" -P "$MAILINABOX_DB_PORT" -u "$MAILINABOX_DB_USER" "$MAILINABOX_DB_NAME" < "$PWD/setup/mailinabox-schema.sql"
+	if ! MYSQL_PWD="$MAILINABOX_DB_PASSWORD" mysql --protocol=TCP --connect-timeout=10 -h "$MAILINABOX_DB_HOST" -P "$MAILINABOX_DB_PORT" -u "$MAILINABOX_DB_USER" "$MAILINABOX_DB_NAME" < "$PWD/setup/mailinabox-schema.sql"; then
+		echo "Failed to initialize Mail-in-a-Box schema on remote database '$MAILINABOX_DB_NAME'."
+		exit 1
+	fi
 
-	cat > "$DB_CONFIG_FILE" << EOF
-MAILINABOX_DB_HOST=$MAILINABOX_DB_HOST
-MAILINABOX_DB_PORT=$MAILINABOX_DB_PORT
-MAILINABOX_DB_NAME=$MAILINABOX_DB_NAME
-MAILINABOX_DB_USER=$MAILINABOX_DB_USER
-MAILINABOX_DB_PASSWORD=$MAILINABOX_DB_PASSWORD
-ROUNDCUBE_DB_HOST=$ROUNDCUBE_DB_HOST
-ROUNDCUBE_DB_PORT=$ROUNDCUBE_DB_PORT
-ROUNDCUBE_DB_NAME=$ROUNDCUBE_DB_NAME
-ROUNDCUBE_DB_USER=$ROUNDCUBE_DB_USER
-ROUNDCUBE_DB_PASSWORD=$ROUNDCUBE_DB_PASSWORD
-NEXTCLOUD_DB_HOST=$NEXTCLOUD_DB_HOST
-NEXTCLOUD_DB_PORT=$NEXTCLOUD_DB_PORT
-NEXTCLOUD_DB_NAME=$NEXTCLOUD_DB_NAME
-NEXTCLOUD_DB_USER=$NEXTCLOUD_DB_USER
-NEXTCLOUD_DB_PASSWORD=$NEXTCLOUD_DB_PASSWORD
-EOF
-	chmod 600 "$DB_CONFIG_FILE"
+	write_db_config_file
 
 	export MAIL_DB_PASS=$MAILINABOX_DB_PASSWORD
 	export ROUNDCUBE_DB_PASS=$ROUNDCUBE_DB_PASSWORD
@@ -180,7 +225,6 @@ EOF
 mysql --defaults-file=/etc/mysql/debian.cnf mailinabox < "$PWD/setup/mailinabox-schema.sql"
 
 # Persist database credentials in a dedicated root-only config file.
-cat > "$DB_CONFIG_FILE" << EOF
 MAILINABOX_DB_HOST=127.0.0.1
 MAILINABOX_DB_PORT=3306
 MAILINABOX_DB_NAME=mailinabox
@@ -196,8 +240,7 @@ NEXTCLOUD_DB_PORT=3306
 NEXTCLOUD_DB_NAME=nextcloud
 NEXTCLOUD_DB_USER=nextcloud
 NEXTCLOUD_DB_PASSWORD=$NEXTCLOUD_DB_PASS
-EOF
-chmod 600 "$DB_CONFIG_FILE"
+write_db_config_file
 
 # Export so that subsequent setup scripts can use these values.
 export MAIL_DB_PASS
