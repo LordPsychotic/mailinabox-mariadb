@@ -72,7 +72,8 @@ EOF
 	export ROUNDCUBE_DB_PASS=$ROUNDCUBE_DB_PASSWORD
 	export NEXTCLOUD_DB_PASS=$NEXTCLOUD_DB_PASSWORD
 
-	exit 0
+	echo "Remote MariaDB configuration validated. Continuing setup..."
+	return 0 2>/dev/null || exit 0
 fi
 
 echo "Installing MariaDB (database server)..."
