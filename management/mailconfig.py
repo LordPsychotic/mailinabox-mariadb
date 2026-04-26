@@ -11,10 +11,8 @@
 
 import os, re
 
-import pymysql
-import pymysql.err
-
 import utils
+import db
 from email_validator import validate_email as validate_email_, EmailNotValidError
 import idna
 import operator
@@ -43,9 +41,10 @@ def validate_email(email, mode=None):
 
 	if mode == 'user':
 		# There are a lot of characters permitted in email addresses, but
-		# Dovecot's MariaDB auth driver requires clean addresses. Also note
-		# that since the mailbox path name is based on the email address, the
-		# address shouldn't be absurdly long and must not have a forward slash.
+		# Dovecot's sqlite auth driver seems to get confused if there are any
+		# unusual characters in the address. Bah. Also note that since
+		# the mailbox path name is based on the email address, the address
+		# shouldn't be absurdly long and must not have a forward slash.
 		# Our database is case sensitive (oops), which affects mail delivery
 		# (Postfix always queries in lowercase?), so also only permit lowercase
 		# letters.
@@ -93,17 +92,91 @@ def is_dcv_address(email):
 	return any(email.startswith((localpart + "@", localpart + "+")) for localpart in ("admin", "administrator", "postmaster", "hostmaster", "webmaster", "abuse"))
 
 def open_database(env, with_connection=False):
-	conn = pymysql.connect(
-		host=env["MAIL_DB_HOST"],
-		user=env["MAIL_DB_USER"],
-		password=env["MAIL_DB_PASS"],
-		database=env["MAIL_DB_NAME"],
-		charset="utf8mb4",
-		autocommit=False,
-	)
+	conn = db.connect()
 	if not with_connection:
 		return conn.cursor()
 	return conn, conn.cursor()
+
+
+def get_domain_id(domain, c):
+	c.execute("INSERT IGNORE INTO domains (domain) VALUES (?)", (domain,))
+	c.execute("SELECT id FROM domains WHERE domain=?", (domain,))
+	row = c.fetchone()
+	if not row:
+		raise ValueError(f"Domain lookup failed for {domain}.")
+	return row[0]
+
+
+def split_email_parts(email):
+	localpart, domain = email.split("@", 1)
+	return localpart, domain
+
+
+def split_alias_source_parts(source):
+	if source.startswith("@"):
+		return "", source[1:]
+	localpart, domain = split_email_parts(source)
+	return localpart, domain
+
+
+def sync_domains_table(env):
+	conn, c = open_database(env, with_connection=True)
+
+	# Insert any domains implied by current records.
+	c.execute(
+		"""
+		INSERT IGNORE INTO domains (domain)
+		SELECT DISTINCT domain FROM (
+			SELECT SUBSTRING_INDEX(email, '@', -1) AS domain FROM users
+			UNION
+			SELECT SUBSTRING_INDEX(source, '@', -1) AS domain FROM aliases WHERE source LIKE '%@%'
+			UNION
+			SELECT SUBSTRING_INDEX(source, '@', -1) AS domain FROM auto_aliases WHERE source LIKE '%@%'
+		) AS all_domains
+		WHERE domain <> ''
+		"""
+	)
+
+	# Keep foreign keys aligned in case rows were manipulated manually.
+	c.execute(
+		"""
+		UPDATE users u
+		JOIN domains d ON d.domain = SUBSTRING_INDEX(u.email, '@', -1)
+		SET u.domain_id = d.id
+		WHERE u.domain_id <> d.id
+		"""
+	)
+	c.execute(
+		"""
+		UPDATE aliases a
+		JOIN domains d ON d.domain = SUBSTRING_INDEX(a.source, '@', -1)
+		SET a.domain_id = d.id
+		WHERE a.domain_id <> d.id
+		"""
+	)
+	c.execute(
+		"""
+		UPDATE auto_aliases a
+		JOIN domains d ON d.domain = SUBSTRING_INDEX(a.source, '@', -1)
+		SET a.domain_id = d.id
+		WHERE a.domain_id <> d.id
+		"""
+	)
+
+	# Remove domains that are no longer referenced anywhere.
+	c.execute(
+		"""
+		DELETE d
+		FROM domains d
+		LEFT JOIN users u ON u.domain_id = d.id
+		LEFT JOIN aliases a ON a.domain_id = d.id
+		LEFT JOIN auto_aliases aa ON aa.domain_id = d.id
+		WHERE u.id IS NULL AND a.id IS NULL AND aa.id IS NULL
+		"""
+	)
+
+	conn.commit()
+	conn.close()
 
 def get_mail_users(env):
 	# Returns a flat, sorted list of all user accounts.
@@ -359,11 +432,14 @@ def add_mail_user(email, pw, privs, quota, env):
 	# hash the password
 	pw = hash_password(pw)
 
+	localpart, domain = split_email_parts(email)
+	domain_id = get_domain_id(domain, c)
+
 	# add the user to the database
 	try:
-		c.execute("INSERT INTO users (email, password, privileges, quota) VALUES (%s, %s, %s, %s)",
-			(email, pw, "\n".join(privs), quota))
-	except pymysql.err.IntegrityError:
+		c.execute("INSERT INTO users (domain_id, localpart, email, password, privileges, quota) VALUES (?, ?, ?, ?, ?, ?)",
+			(domain_id, localpart, email, pw, "\n".join(privs), quota))
+	except db.IntegrityError:
 		return ("User already exists.", 400)
 
 	# write databasebefore next step
@@ -383,7 +459,7 @@ def set_mail_password(email, pw, env):
 
 	# update the database
 	conn, c = open_database(env, with_connection=True)
-	c.execute("UPDATE users SET password=%s WHERE email=%s", (pw, email))
+	c.execute("UPDATE users SET password=? WHERE email=?", (pw, email))
 	if c.rowcount != 1:
 		return (f"That's not a user ({email}).", 400)
 	conn.commit()
@@ -398,7 +474,7 @@ def hash_password(pw):
 
 def get_mail_quota(email, env):
 	_conn, c = open_database(env, with_connection=True)
-	c.execute("SELECT quota FROM users WHERE email=%s", (email,))
+	c.execute("SELECT quota FROM users WHERE email=?", (email,))
 	rows = c.fetchall()
 	if len(rows) != 1:
 		return (f"That's not a user ({email}).", 400)
@@ -412,7 +488,7 @@ def set_mail_quota(email, quota, env):
 
 	# update the database
 	conn, c = open_database(env, with_connection=True)
-	c.execute("UPDATE users SET quota=%s WHERE email=%s", (quota, email))
+	c.execute("UPDATE users SET quota=? WHERE email=?", (quota, email))
 	if c.rowcount != 1:
 		return (f"That's not a user ({email}).", 400)
 	conn.commit()
@@ -453,7 +529,7 @@ def get_mail_password(email, env):
 	# http://wiki2.dovecot.org/Authentication/PasswordSchemes
 	# update the database
 	c = open_database(env)
-	c.execute('SELECT password FROM users WHERE email=%s', (email,))
+	c.execute('SELECT password FROM users WHERE email=?', (email,))
 	rows = c.fetchall()
 	if len(rows) != 1:
 		msg = f"That's not a user ({email})."
@@ -463,7 +539,7 @@ def get_mail_password(email, env):
 def remove_mail_user(email, env):
 	# remove
 	conn, c = open_database(env, with_connection=True)
-	c.execute("DELETE FROM users WHERE email=%s", (email,))
+	c.execute("DELETE FROM users WHERE email=?", (email,))
 	if c.rowcount != 1:
 		return (f"That's not a user ({email}).", 400)
 	conn.commit()
@@ -477,7 +553,7 @@ def parse_privs(value):
 def get_mail_user_privileges(email, env, empty_on_error=False):
 	# get privs
 	c = open_database(env)
-	c.execute('SELECT privileges FROM users WHERE email=%s', (email,))
+	c.execute('SELECT privileges FROM users WHERE email=?', (email,))
 	rows = c.fetchall()
 	if len(rows) != 1:
 		if empty_on_error: return []
@@ -509,7 +585,7 @@ def add_remove_mail_user_privilege(email, priv, action, env):
 
 	# commit to database
 	conn, c = open_database(env, with_connection=True)
-	c.execute("UPDATE users SET privileges=%s WHERE email=%s", ("\n".join(privs), email))
+	c.execute("UPDATE users SET privileges=? WHERE email=?", ("\n".join(privs), email))
 	if c.rowcount != 1:
 		return ("Something went wrong.", 400)
 	conn.commit()
@@ -592,13 +668,15 @@ def add_mail_alias(address, forwards_to, permitted_senders, env, update_if_exist
 	permitted_senders = None if len(validated_permitted_senders) == 0 else ",".join(validated_permitted_senders)
 
 	conn, c = open_database(env, with_connection=True)
+	source_localpart, source_domain = split_alias_source_parts(address)
+	domain_id = get_domain_id(source_domain, c)
 	try:
-		c.execute("INSERT INTO aliases (source, destination, permitted_senders) VALUES (%s, %s, %s)", (address, forwards_to, permitted_senders))
+		c.execute("INSERT INTO aliases (domain_id, source_localpart, source, destination, permitted_senders) VALUES (?, ?, ?, ?, ?)", (domain_id, source_localpart, address, forwards_to, permitted_senders))
 		return_status = "alias added"
-	except pymysql.err.IntegrityError:
+	except db.IntegrityError:
 		if not update_if_exists:
 			return (f"Alias already exists ({address}).", 400)
-		c.execute("UPDATE aliases SET destination = %s, permitted_senders = %s WHERE source = %s", (forwards_to, permitted_senders, address))
+		c.execute("UPDATE aliases SET destination = ?, permitted_senders = ? WHERE source = ?", (forwards_to, permitted_senders, address))
 		return_status = "alias updated"
 
 	conn.commit()
@@ -614,7 +692,7 @@ def remove_mail_alias(address, env, do_kick=True):
 
 	# remove
 	conn, c = open_database(env, with_connection=True)
-	c.execute("DELETE FROM aliases WHERE source=%s", (address,))
+	c.execute("DELETE FROM aliases WHERE source=?", (address,))
 	if c.rowcount != 1:
 		return (f"That's not an alias ({address}).", 400)
 	conn.commit()
@@ -628,7 +706,9 @@ def add_auto_aliases(aliases, env):
 	conn, c = open_database(env, with_connection=True)
 	c.execute("DELETE FROM auto_aliases")
 	for source, destination in aliases.items():
-		c.execute("INSERT INTO auto_aliases (source, destination) VALUES (%s, %s)", (source, destination))
+		source_localpart, source_domain = split_alias_source_parts(source)
+		domain_id = get_domain_id(source_domain, c)
+		c.execute("INSERT INTO auto_aliases (domain_id, source_localpart, source, destination) VALUES (?, ?, ?, ?)", (domain_id, source_localpart, source, destination))
 	conn.commit()
 
 def get_system_administrator(env):
@@ -704,6 +784,9 @@ def kick(env, mail_result=None):
 			and not auto:
 			remove_mail_alias(address, env, do_kick=False)
 			results.append(f"removed alias {address} (was to {forwards_to}; domain no longer used for email)\n")
+
+	# Keep the domains table synchronized for Postfix domain validation.
+	sync_domains_table(env)
 
 	# Update DNS and nginx in case any domains are added/removed.
 

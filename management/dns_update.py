@@ -6,8 +6,8 @@
 
 import sys, os, os.path, datetime, re, hashlib, base64
 import ipaddress
-import rtyaml
 import dns.resolver
+import db
 
 from utils import shell, load_env_vars_from_file, safe_domain_name, sort_domains, get_ssh_port
 from ssl_certificates import get_ssl_certificates, check_certificate
@@ -801,38 +801,8 @@ def write_opendkim_tables(domains, env):
 ########################################################################
 
 def get_custom_dns_config(env, only_real_records=False):
-	try:
-		with open(os.path.join(env['STORAGE_ROOT'], 'dns/custom.yaml'), encoding="utf-8") as f:
-			custom_dns = rtyaml.load(f)
-		if not isinstance(custom_dns, dict): raise ValueError # caught below
-	except:
-		return [ ]
-
-	for qname, value in custom_dns.items():
-		if qname == "_secondary_nameserver" and only_real_records: continue # skip fake record
-
-		# Short form. Mapping a domain name to a string is short-hand
-		# for creating A records.
-		if isinstance(value, str):
-			values = [("A", value)]
-
-		# A mapping creates multiple records.
-		elif isinstance(value, dict):
-			values = value.items()
-
-		# No other type of data is allowed.
-		else:
-			raise ValueError
-
-		for rtype, value2 in values:
-			if isinstance(value2, str):
-				yield (qname, rtype, value2)
-			elif isinstance(value2, list):
-				for value3 in value2:
-					yield (qname, rtype, value3)
-			# No other type of data is allowed.
-			else:
-				raise ValueError
+	for qname, rtype, value in db.list_dns_records(include_internal=not only_real_records):
+		yield (qname, rtype, value)
 
 def filter_custom_records(domain, custom_dns_iter):
 	for qname, rtype, value in custom_dns_iter:
@@ -853,39 +823,8 @@ def filter_custom_records(domain, custom_dns_iter):
 		yield (qname, rtype, value)
 
 def write_custom_dns_config(config, env):
-	# We get a list of (qname, rtype, value) triples. Convert this into a
-	# nice dictionary format for storage on disk.
-	from collections import OrderedDict
-	config = list(config)
-	dns = OrderedDict()
-	seen_qnames = set()
-
-	# Process the qnames in the order we see them.
-	for qname in [rec[0] for rec in config]:
-		if qname in seen_qnames: continue
-		seen_qnames.add(qname)
-
-		records = [(rec[1], rec[2]) for rec in config if rec[0] == qname]
-		if len(records) == 1 and records[0][0] == "A":
-			dns[qname] = records[0][1]
-		else:
-			dns[qname] = OrderedDict()
-			seen_rtypes = set()
-
-			# Process the rtypes in the order we see them.
-			for rtype in [rec[0] for rec in records]:
-				if rtype in seen_rtypes: continue
-				seen_rtypes.add(rtype)
-
-				values = [rec[1] for rec in records if rec[0] == rtype]
-				if len(values) == 1:
-					values = values[0]
-				dns[qname][rtype] = values
-
-	# Write.
-	config_yaml = rtyaml.dump(dns)
-	with open(os.path.join(env['STORAGE_ROOT'], 'dns/custom.yaml'), "w", encoding="utf-8") as f:
-		f.write(config_yaml)
+	# Persist canonical custom DNS records to MariaDB.
+	db.replace_dns_records(list(config))
 
 def set_custom_dns_record(qname, rtype, value, action, env):
 	# validate qname

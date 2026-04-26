@@ -4,6 +4,10 @@
 
 source setup/functions.sh # load our functions
 source /etc/mailinabox.conf # load global vars
+source /etc/mailinabox-db.conf # database credentials
+
+ROUNDCUBE_DSN="mysql://${ROUNDCUBE_DB_USER}:${ROUNDCUBE_DB_PASSWORD}@${ROUNDCUBE_DB_HOST}:${ROUNDCUBE_DB_PORT}/${ROUNDCUBE_DB_NAME}"
+MAILINABOX_DSN="mysql://${MAILINABOX_DB_USER}:${MAILINABOX_DB_PASSWORD}@${MAILINABOX_DB_HOST}:${MAILINABOX_DB_PORT}/${MAILINABOX_DB_NAME}"
 
 # ### Installing Roundcube
 
@@ -24,6 +28,7 @@ apt_install \
 	dbconfig-common \
 	php"${PHP_VER}"-cli php"${PHP_VER}"-mysql php"${PHP_VER}"-intl php"${PHP_VER}"-common php"${PHP_VER}"-curl php"${PHP_VER}"-imap \
 	php"${PHP_VER}"-gd php"${PHP_VER}"-pspell php"${PHP_VER}"-mbstring php"${PHP_VER}"-xml libjs-jquery libjs-jquery-mousewheel libmagic1
+
 
 # Install Roundcube from source if it is not already present or if it is out of date.
 # Combine the Roundcube version number with the commit hash of plugins to track
@@ -48,6 +53,33 @@ UPDATE_KEY=$VERSION:$PERSISTENT_LOGIN_VERSION:$HTML5_NOTIFIER_VERSION:$CARDDAV_V
 RCM_DIR=/usr/local/lib/roundcubemail
 RCM_PLUGIN_DIR=${RCM_DIR}/plugins
 RCM_CONFIG=${RCM_DIR}/config/config.inc.php
+
+reset_roundcube_db_schema() {
+	echo "Roundcube database schema looks inconsistent. Reinitializing the Roundcube database..."
+
+	if [ "${MARIADB_MODE:-local}" = "remote" ]; then
+		set +e
+		MYSQL_PWD="$ROUNDCUBE_DB_PASSWORD" mysql --protocol=TCP --connect-timeout=10 -h "$ROUNDCUBE_DB_HOST" -P "$ROUNDCUBE_DB_PORT" -u "$ROUNDCUBE_DB_USER" << EOF
+DROP DATABASE IF EXISTS \`$ROUNDCUBE_DB_NAME\`;
+CREATE DATABASE \`$ROUNDCUBE_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+EOF
+		E=$?
+		set -e
+		if [ $E -ne 0 ]; then
+			echo "Failed to reinitialize remote Roundcube database at $ROUNDCUBE_DB_HOST:$ROUNDCUBE_DB_PORT."
+			echo "Ensure '$ROUNDCUBE_DB_USER' has permission to drop/create '$ROUNDCUBE_DB_NAME'."
+			exit 1
+		fi
+		return
+	fi
+
+	mysql --defaults-file=/etc/mysql/debian.cnf << EOF
+DROP DATABASE IF EXISTS ${ROUNDCUBE_DB_NAME};
+CREATE DATABASE ${ROUNDCUBE_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+GRANT ALL PRIVILEGES ON ${ROUNDCUBE_DB_NAME}.* TO '${ROUNDCUBE_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${ROUNDCUBE_DB_PASSWORD}';
+FLUSH PRIVILEGES;
+EOF
+}
 
 needs_update=0 #NODOC
 if [ ! -f /usr/local/lib/roundcubemail/version ]; then
@@ -114,7 +146,7 @@ cat > $RCM_CONFIG <<EOF;
 \$config = array();
 \$config['log_dir'] = '/var/log/roundcubemail/';
 \$config['temp_dir'] = '/var/tmp/roundcubemail/';
-\$config['db_dsnw'] = 'mysql://$ROUNDCUBE_DB_USER:$ROUNDCUBE_DB_PASS@$ROUNDCUBE_DB_HOST/$ROUNDCUBE_DB_NAME';
+\$config['db_dsnw'] = '$ROUNDCUBE_DSN';
 \$config['imap_host'] = 'ssl://localhost:993';
 \$config['imap_conn_options'] = array(
   'ssl'         => array(
@@ -170,8 +202,8 @@ cat > ${RCM_PLUGIN_DIR}/carddav/config.inc.php <<EOF;
 EOF
 
 # Create writable directories.
-mkdir -p /var/log/roundcubemail /var/tmp/roundcubemail "$STORAGE_ROOT/mail/roundcube"
-chown -R www-data:www-data /var/log/roundcubemail /var/tmp/roundcubemail "$STORAGE_ROOT/mail/roundcube"
+mkdir -p /var/log/roundcubemail /var/tmp/roundcubemail
+chown -R www-data:www-data /var/log/roundcubemail /var/tmp/roundcubemail
 
 # Ensure the log file monitored by fail2ban exists, or else fail2ban can't start.
 sudo -u www-data touch /var/log/roundcubemail/errors.log
@@ -184,7 +216,7 @@ cp ${RCM_PLUGIN_DIR}/password/config.inc.php.dist \
 
 tools/editconf.py ${RCM_PLUGIN_DIR}/password/config.inc.php \
 	"\$config['password_minimum_length']=8;" \
-	"\$config['password_db_dsn']='mysql://$MAIL_DB_USER:$MAIL_DB_PASS@$MAIL_DB_HOST/$MAIL_DB_NAME';" \
+	"\$config['password_db_dsn']='$MAILINABOX_DSN';" \
 	"\$config['password_query']='UPDATE users SET password=%P WHERE email=%u';" \
 	"\$config['password_algorithm']='sha512-crypt';" \
 	"\$config['password_algorithm_prefix']='{SHA512-CRYPT}';"
@@ -192,17 +224,19 @@ tools/editconf.py ${RCM_PLUGIN_DIR}/password/config.inc.php \
 # so PHP can use doveadm, for the password changing plugin
 usermod -a -G dovecot www-data
 
-# Ensure the mail directory is accessible.
-chown root:www-data "$STORAGE_ROOT/mail"
-chmod 775 "$STORAGE_ROOT/mail"
-
 # Fix Carddav permissions:
 chown -f -R root:www-data ${RCM_PLUGIN_DIR}/carddav
 # root:www-data need all permissions, others only read
 chmod -R 774 ${RCM_PLUGIN_DIR}/carddav
 
 # Run Roundcube database migration script (database is created if it does not exist)
-php"$PHP_VER" ${RCM_DIR}/bin/updatedb.sh --dir ${RCM_DIR}/SQL --package roundcube
+if ! php"$PHP_VER" ${RCM_DIR}/bin/updatedb.sh --dir ${RCM_DIR}/SQL --package roundcube; then
+	reset_roundcube_db_schema
+
+	# Initialize from scratch and then ensure all package migrations are applied.
+	php"$PHP_VER" ${RCM_DIR}/bin/initdb.sh --dir ${RCM_DIR}/SQL --package roundcube
+	php"$PHP_VER" ${RCM_DIR}/bin/updatedb.sh --dir ${RCM_DIR}/SQL --package roundcube
+fi
 
 # Enable PHP modules.
 phpenmod -v "$PHP_VER" imap

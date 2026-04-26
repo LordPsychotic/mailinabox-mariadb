@@ -1012,6 +1012,7 @@ def check_miab_version(env, output):
 def run_and_output_changes(env, pool):
 	import json
 	from difflib import SequenceMatcher
+	import db
 
 	out = ConsoleOutput()
 
@@ -1020,13 +1021,10 @@ def run_and_output_changes(env, pool):
 	run_checks(True, env, cur, pool)
 
 	# Load previously saved status checks.
-	cache_fn = "/var/cache/mailinabox/status_checks.json"
-	if os.path.exists(cache_fn):
-		with open(cache_fn, encoding="utf-8") as f:
-			try:
-				prev = json.load(f)
-			except json.JSONDecodeError:
-				prev = []
+	prev = db.get_setting("status_checks_cache", default=[])
+	if not isinstance(prev, list):
+		prev = []
+	if len(prev) > 0:
 
 		# Group the serial output into categories by the headings.
 		def group_by_heading(lines):
@@ -1077,9 +1075,7 @@ def run_and_output_changes(env, pool):
 				out.print_warning("This section was removed.")
 
 	# Store the current status checks output for next time.
-	os.makedirs(os.path.dirname(cache_fn), exist_ok=True)
-	with open(cache_fn, "w", encoding="utf-8") as f:
-		json.dump(cur.buf, f, indent=True)
+	db.set_setting("status_checks_cache", cur.buf)
 
 def normalize_ip(ip):
 	# Use ipaddress module to normalize the IPv6 notation and

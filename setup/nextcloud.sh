@@ -4,6 +4,7 @@
 
 source setup/functions.sh # load our functions
 source /etc/mailinabox.conf # load global vars
+source /etc/mailinabox-db.conf # database credentials
 
 # ### Installing Nextcloud
 
@@ -135,7 +136,7 @@ InstallNextcloud() {
 
 	# If this isn't a new installation, immediately run the upgrade script.
 	# Then check for success (0=ok and 3=no upgrade needed, both are success).
-	if [ -e "$STORAGE_ROOT/owncloud/owncloud.db" ]; then
+	if [ -e "$STORAGE_ROOT/owncloud/config.php" ]; then
 		# ownCloud 8.1.1 broke upgrades. It may fail on the first attempt, but
 		# that can be OK.
 		sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/occ upgrade
@@ -186,11 +187,11 @@ if [ ! -d /usr/local/lib/owncloud/ ] || [[ ! ${CURRENT_NEXTCLOUD_VER} =~ ^$nextc
 		echo "Upgrading Nextcloud --- backing up existing installation, configuration, and database to directory to $BACKUP_DIRECTORY..."
 		cp -r /usr/local/lib/owncloud "$BACKUP_DIRECTORY/owncloud-install"
 	fi
-	if [ -e "$STORAGE_ROOT/owncloud/owncloud.db" ]; then
-		cp "$STORAGE_ROOT/owncloud/owncloud.db" "$BACKUP_DIRECTORY"
-	fi
 	if [ -e "$STORAGE_ROOT/owncloud/config.php" ]; then
 		cp "$STORAGE_ROOT/owncloud/config.php" "$BACKUP_DIRECTORY"
+	fi
+	if [ -n "${CURRENT_NEXTCLOUD_VER}" ]; then
+		MYSQL_PWD="$NEXTCLOUD_DB_PASSWORD" mysqldump -h "$NEXTCLOUD_DB_HOST" -P "$NEXTCLOUD_DB_PORT" -u "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" > "$BACKUP_DIRECTORY/nextcloud.sql" || /bin/true
 	fi
 
 	# If ownCloud or Nextcloud was previously installed....
@@ -246,9 +247,9 @@ fi
 
 # ### Configuring Nextcloud
 
-# Setup Nextcloud if the Nextcloud database does not yet exist. Running setup when
-# the database does exist wipes the database and user data.
-if [ ! -f "$STORAGE_ROOT/owncloud/owncloud.db" ]; then
+# Setup Nextcloud if the Nextcloud configuration does not yet exist. Running setup when
+# the database already exists wipes the database and user data.
+if [ ! -f "$STORAGE_ROOT/owncloud/config.php" ]; then
 	# Create user data directory
 	mkdir -p "$STORAGE_ROOT/owncloud"
 
@@ -287,11 +288,11 @@ EOF
 \$AUTOCONFIG = array (
   # storage/database
   'directory' => '$STORAGE_ROOT/owncloud',
-  'dbtype' => 'mysql',
-  'dbname' => '$NEXTCLOUD_DB_NAME',
-  'dbuser' => '$NEXTCLOUD_DB_USER',
-  'dbpassword' => '$NEXTCLOUD_DB_PASS',
-  'dbhost' => '$NEXTCLOUD_DB_HOST',
+	'dbtype' => 'mysql',
+	'dbname' => '$NEXTCLOUD_DB_NAME',
+	'dbhost' => '$NEXTCLOUD_DB_HOST:$NEXTCLOUD_DB_PORT',
+	'dbuser' => '$NEXTCLOUD_DB_USER',
+	'dbpass' => '$NEXTCLOUD_DB_PASSWORD',
 
   # create an administrator account with a random password so that
   # the user does not have to enter anything on first load of Nextcloud
@@ -304,7 +305,7 @@ EOF
 	# Set permissions
 	chown -R www-data:www-data "$STORAGE_ROOT/owncloud" /usr/local/lib/owncloud
 
-	# Execute Nextcloud's setup step, which creates the Nextcloud MariaDB database.
+	# Execute Nextcloud's setup step, which initializes the Nextcloud MariaDB schema.
 	# It also wipes it if it exists. And it updates config.php with database
 	# settings and deletes the autoconfig.php file.
 	(cd /usr/local/lib/owncloud || exit; sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/index.php;)
@@ -406,11 +407,8 @@ tools/editconf.py /etc/php/"$PHP_VER"/cli/conf.d/10-opcache.ini -c ';' \
 
 # Migrate users_external data from <0.6.0 to version 3.0.0
 # (see https://github.com/nextcloud/user_external).
-# This version was probably in use in Mail-in-a-Box v0.41 (February 26, 2019) and earlier.
-# We moved to v0.6.3 in 193763f8. Ignore errors - maybe there are duplicated users with the
-# correct backend already.
-mysql -h "$NEXTCLOUD_DB_HOST" -u "$NEXTCLOUD_DB_USER" -p"$NEXTCLOUD_DB_PASS" "$NEXTCLOUD_DB_NAME" \
-	-e "UPDATE oc_users_external SET backend='127.0.0.1';" || /bin/true
+# Ignore errors in case the table does not exist yet.
+MYSQL_PWD="$NEXTCLOUD_DB_PASSWORD" mysql -h "$NEXTCLOUD_DB_HOST" -P "$NEXTCLOUD_DB_PORT" -u "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" -e "UPDATE oc_users_external SET backend='127.0.0.1';" || /bin/true
 
 # Set up a general cron job for Nextcloud.
 # Also add another job for Calendar updates, per advice in the Nextcloud docs
@@ -449,8 +447,7 @@ EOF
 # But if we wanted to, we would do this:
 # ```
 # for user in $(management/cli.py user admins); do
-#	 mysql -h "$NEXTCLOUD_DB_HOST" -u "$NEXTCLOUD_DB_USER" -p"$NEXTCLOUD_DB_PASS" "$NEXTCLOUD_DB_NAME" \
-#		 -e "INSERT IGNORE INTO oc_group_user VALUES ('admin', '$user')"
+#	 MYSQL_PWD=$NEXTCLOUD_DB_PASSWORD mysql -h $NEXTCLOUD_DB_HOST -P $NEXTCLOUD_DB_PORT -u $NEXTCLOUD_DB_USER $NEXTCLOUD_DB_NAME -e "INSERT IGNORE INTO oc_group_user VALUES ('admin', '$user')"
 # done
 # ```
 

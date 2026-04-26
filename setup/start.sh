@@ -4,6 +4,9 @@
 
 source setup/functions.sh # load our functions
 
+# Ensure helper scripts are executable in case mode bits are lost in checkout.
+find setup tools management -maxdepth 1 -type f -exec chmod +x {} +
+
 # Check system setup: Are we running as root on Ubuntu 18.04 on a
 # machine with enough memory? Is /tmp mounted with exec.
 # If not, this shows an error and exits.
@@ -38,18 +41,14 @@ fi
 if [ -f /etc/mailinabox.conf ]; then
 	# Run any system migrations before proceeding. Since this is a second run,
 	# we assume we have Python already installed.
-
-	# Use the virtualenv Python if it exists (has pymysql installed),
-	# otherwise fall back to system Python.
-	if [ -x /usr/local/lib/mailinabox/env/bin/python3 ]; then
-		/usr/local/lib/mailinabox/env/bin/python3 setup/migrate.py --migrate || exit 1
-	else
-		setup/migrate.py --migrate || exit 1
-	fi
+	python3 setup/migrate.py --migrate || exit 1
 
 	# Load the old .conf file to get existing configuration options loaded
 	# into variables with a DEFAULT_ prefix.
 	cat /etc/mailinabox.conf | sed s/^/DEFAULT_/ > /tmp/mailinabox.prev.conf
+	if [ -f /etc/mailinabox-db.conf ]; then
+		grep -Ev '(^[[:space:]]*$|^[[:space:]]*#|_PASSWORD=)' /etc/mailinabox-db.conf | sed s/^/DEFAULT_/ >> /tmp/mailinabox.prev.conf || true
+	fi
 	source /tmp/mailinabox.prev.conf
 	rm -f /tmp/mailinabox.prev.conf
 else
@@ -98,7 +97,7 @@ fi
 f=$STORAGE_ROOT
 while [[ $f != / ]]; do chmod a+rx "$f"; f=$(dirname "$f"); done;
 if [ ! -f "$STORAGE_ROOT/mailinabox.version" ]; then
-	setup/migrate.py --current > "$STORAGE_ROOT/mailinabox.version"
+	python3 setup/migrate.py --current > "$STORAGE_ROOT/mailinabox.version"
 	chown "$STORAGE_USER:$STORAGE_USER" "$STORAGE_ROOT/mailinabox.version"
 fi
 
@@ -106,11 +105,6 @@ fi
 # tools know where to look for data. The default MTA_STS_MODE setting
 # is blank unless set by an environment variable, but see web.sh for
 # how that is interpreted.
-# Load existing DB passwords if present so re-installs keep the same credentials.
-MAIL_DB_PASS=${DEFAULT_MAIL_DB_PASS:-}
-ROUNDCUBE_DB_PASS=${DEFAULT_ROUNDCUBE_DB_PASS:-}
-NEXTCLOUD_DB_PASS=${DEFAULT_NEXTCLOUD_DB_PASS:-}
-
 cat > /etc/mailinabox.conf << EOF;
 STORAGE_USER=$STORAGE_USER
 STORAGE_ROOT=$STORAGE_ROOT
@@ -120,18 +114,20 @@ PUBLIC_IPV6=$PUBLIC_IPV6
 PRIVATE_IP=$PRIVATE_IP
 PRIVATE_IPV6=$PRIVATE_IPV6
 MTA_STS_MODE=${DEFAULT_MTA_STS_MODE:-enforce}
-MAIL_DB_HOST=127.0.0.1
-MAIL_DB_NAME=mailinabox
-MAIL_DB_USER=mailinabox
-MAIL_DB_PASS=$MAIL_DB_PASS
-ROUNDCUBE_DB_HOST=127.0.0.1
-ROUNDCUBE_DB_NAME=roundcube
-ROUNDCUBE_DB_USER=roundcube
-ROUNDCUBE_DB_PASS=$ROUNDCUBE_DB_PASS
-NEXTCLOUD_DB_HOST=127.0.0.1
-NEXTCLOUD_DB_NAME=nextcloud
-NEXTCLOUD_DB_USER=nextcloud
-NEXTCLOUD_DB_PASS=$NEXTCLOUD_DB_PASS
+USE_MARIADB=1
+MARIADB_MODE=$MARIADB_MODE
+MAILINABOX_DB_HOST=$MAILINABOX_DB_HOST
+MAILINABOX_DB_PORT=$MAILINABOX_DB_PORT
+MAILINABOX_DB_NAME=$MAILINABOX_DB_NAME
+MAILINABOX_DB_USER=$MAILINABOX_DB_USER
+ROUNDCUBE_DB_HOST=$ROUNDCUBE_DB_HOST
+ROUNDCUBE_DB_PORT=$ROUNDCUBE_DB_PORT
+ROUNDCUBE_DB_NAME=$ROUNDCUBE_DB_NAME
+ROUNDCUBE_DB_USER=$ROUNDCUBE_DB_USER
+NEXTCLOUD_DB_HOST=$NEXTCLOUD_DB_HOST
+NEXTCLOUD_DB_PORT=$NEXTCLOUD_DB_PORT
+NEXTCLOUD_DB_NAME=$NEXTCLOUD_DB_NAME
+NEXTCLOUD_DB_USER=$NEXTCLOUD_DB_USER
 EOF
 
 # Start service configuration.

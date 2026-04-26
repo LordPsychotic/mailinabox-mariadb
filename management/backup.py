@@ -11,6 +11,7 @@ import os, os.path, re, datetime, sys
 import dateutil.parser, dateutil.relativedelta, dateutil.tz
 from datetime import date
 import rtyaml
+import db
 from exclusiveprocess import Lock
 
 from utils import load_environment, shell, wait_for_service
@@ -585,14 +586,10 @@ def get_backup_config(env, for_save=False, for_ui=False):
 		"target": "local",
 	}
 
-	# Merge in anything written to custom.yaml.
-	try:
-		with open(os.path.join(backup_root, 'custom.yaml'), encoding="utf-8") as f:
-			custom_config = rtyaml.load(f)
-		if not isinstance(custom_config, dict): raise ValueError # caught below
+	# Merge in persisted backup configuration from the database.
+	custom_config = db.get_setting("backup_config", default={})
+	if isinstance(custom_config, dict):
 		config.update(custom_config)
-	except:
-		pass
 
 	# When updating config.yaml, don't do any further processing on what we find.
 	if for_save:
@@ -618,9 +615,7 @@ def get_backup_config(env, for_save=False, for_ui=False):
 	return config
 
 def write_backup_config(env, newconfig):
-	backup_root = os.path.join(env["STORAGE_ROOT"], 'backup')
-	with open(os.path.join(backup_root, 'custom.yaml'), "w", encoding="utf-8") as f:
-		f.write(rtyaml.dump(newconfig))
+	db.set_setting("backup_config", newconfig)
 
 if __name__ == "__main__":
 	if sys.argv[-1] == "--verify":
