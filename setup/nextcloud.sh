@@ -172,9 +172,12 @@ else
 	CURRENT_NEXTCLOUD_VER=""
 fi
 
+NEXTCLOUD_UPGRADE_REQUIRED=0
+
 # If the Nextcloud directory is missing (never been installed before, or the nextcloud version to be installed is different
 # from the version currently installed, do the install/upgrade
 if [ ! -d /usr/local/lib/owncloud/ ] || [[ ! ${CURRENT_NEXTCLOUD_VER} =~ ^$nextcloud_ver ]]; then
+	NEXTCLOUD_UPGRADE_REQUIRED=1
 
 	# Stop php-fpm if running. If they are not running (which happens on a previously failed install), dont bail.
 	service php"$PHP_VER"-fpm stop &> /dev/null || /bin/true
@@ -243,76 +246,63 @@ if [ ! -d /usr/local/lib/owncloud/ ] || [[ ! ${CURRENT_NEXTCLOUD_VER} =~ ^$nextc
 	fi
 
 	InstallNextcloud $nextcloud_ver $nextcloud_hash $contacts_ver $contacts_hash $calendar_ver $calendar_hash $user_external_ver $user_external_hash
+else
+	echo "Nextcloud is already at target version $nextcloud_ver (current database version: ${CURRENT_NEXTCLOUD_VER:-unknown})."
 fi
 
 # ### Configuring Nextcloud
 
+# Detect whether the Nextcloud schema exists so we can recover from partial installs
+# that created a config file but never initialized any tables.
+NEXTCLOUD_DB_HAS_SCHEMA=0
+if ! NEXTCLOUD_SCHEMA_TABLES=$(MYSQL_PWD="$NEXTCLOUD_DB_PASSWORD" mysql -N -B -h "$NEXTCLOUD_DB_HOST" -P "$NEXTCLOUD_DB_PORT" -u "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" -e "SHOW TABLES LIKE 'oc\\_%'" 2>/dev/null); then
+	echo "Failed to query Nextcloud database '$NEXTCLOUD_DB_NAME' at $NEXTCLOUD_DB_HOST:$NEXTCLOUD_DB_PORT."
+	exit 1
+fi
+if [ -n "$NEXTCLOUD_SCHEMA_TABLES" ]; then
+	NEXTCLOUD_DB_HAS_SCHEMA=1
+fi
+
 # Setup Nextcloud if the Nextcloud configuration does not yet exist. Running setup when
 # the database already exists wipes the database and user data.
-if [ ! -f "$STORAGE_ROOT/owncloud/config.php" ]; then
+if [ ! -f "$STORAGE_ROOT/owncloud/config.php" ] || [ "$NEXTCLOUD_DB_HAS_SCHEMA" -eq 0 ]; then
 	# Create user data directory
 	mkdir -p "$STORAGE_ROOT/owncloud"
 
-	# Create an initial configuration file.
-	instanceid=oc$(echo "$PRIMARY_HOSTNAME" | sha1sum | fold -w 10 | head -n 1)
-	cat > "$STORAGE_ROOT/owncloud/config.php" <<EOF;
-<?php
-\$CONFIG = array (
-  'datadirectory' => '$STORAGE_ROOT/owncloud',
+	if [ -f "$STORAGE_ROOT/owncloud/config.php" ] && [ "$NEXTCLOUD_DB_HAS_SCHEMA" -eq 0 ]; then
+		echo "Nextcloud config exists but database schema is empty. Re-initializing Nextcloud."
+		rm -f "$STORAGE_ROOT/owncloud/config.php"
+	fi
 
-  'instanceid' => '$instanceid',
-
-  'forcessl' => true, # if unset/false, Nextcloud sends a HSTS=0 header, which conflicts with nginx config
-
-  'overwritewebroot' => '/cloud',
-  'overwrite.cli.url' => '/cloud',
-  'user_backends' => array(
-    array(
-      'class' => '\OCA\UserExternal\IMAP',
-      'arguments' => array(
-        '127.0.0.1', 143, null, null, false, false
-       ),
-    ),
-  ),
-  'memcache.local' => '\OC\Memcache\APCu',
-);
-?>
-EOF
-
-	# Create an auto-configuration file to fill in database settings
-	# when the install script is run. Make an administrator account
-	# here or else the install can't finish.
+	# Make an administrator account with a random password so that
+	# the user does not have to enter anything on first load of Nextcloud.
 	adminpassword=$(dd if=/dev/urandom bs=1 count=40 2>/dev/null | sha1sum | fold -w 30 | head -n 1)
-	cat > /usr/local/lib/owncloud/config/autoconfig.php <<EOF;
-<?php
-\$AUTOCONFIG = array (
-  # storage/database
-  'directory' => '$STORAGE_ROOT/owncloud',
-	'dbtype' => 'mysql',
-	'dbname' => '$NEXTCLOUD_DB_NAME',
-	'dbhost' => '$NEXTCLOUD_DB_HOST:$NEXTCLOUD_DB_PORT',
-	'dbuser' => '$NEXTCLOUD_DB_USER',
-	'dbpass' => '$NEXTCLOUD_DB_PASSWORD',
-
-  # create an administrator account with a random password so that
-  # the user does not have to enter anything on first load of Nextcloud
-  'adminlogin'    => 'root',
-  'adminpass'     => '$adminpassword',
-);
-?>
-EOF
 
 	# Set permissions
 	chown -R www-data:www-data "$STORAGE_ROOT/owncloud" /usr/local/lib/owncloud
 
-	# Execute Nextcloud's setup step, which initializes the Nextcloud MariaDB schema.
-	# It also wipes it if it exists. And it updates config.php with database
-	# settings and deletes the autoconfig.php file.
-	(cd /usr/local/lib/owncloud || exit; sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/index.php;)
+	# Run the installer explicitly via occ because running index.php from CLI can
+	# no-op on newer Nextcloud builds, leaving an empty database.
+	hide_output sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/occ maintenance:install \
+		--database "mysql" \
+		--database-host "$NEXTCLOUD_DB_HOST" \
+		--database-port "$NEXTCLOUD_DB_PORT" \
+		--database-name "$NEXTCLOUD_DB_NAME" \
+		--database-user "$NEXTCLOUD_DB_USER" \
+		--database-pass "$NEXTCLOUD_DB_PASSWORD" \
+		--admin-user "root" \
+		--admin-pass "$adminpassword" \
+		--data-dir "$STORAGE_ROOT/owncloud"
+
+	# Guard against partial installs where the database exists but no schema was created.
+	if ! MYSQL_PWD="$NEXTCLOUD_DB_PASSWORD" mysql -N -B -h "$NEXTCLOUD_DB_HOST" -P "$NEXTCLOUD_DB_PORT" -u "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" -e "SHOW TABLES LIKE 'oc\\_%'" | grep -q .; then
+		echo "Nextcloud install did not initialize database tables in '$NEXTCLOUD_DB_NAME'."
+		exit 1
+	fi
 fi
 
 # Update config.php.
-# * trusted_domains is reset to localhost by autoconfig starting with ownCloud 8.1.1,
+# * trusted_domains can be reset to localhost during install/upgrade,
 #   so set it here. It also can change if the box's PRIMARY_HOSTNAME changes, so
 #   this will make sure it has the right value.
 # * Some settings weren't included in previous versions of Mail-in-a-Box.
@@ -332,6 +322,8 @@ include("$STORAGE_ROOT/owncloud/config.php");
 
 \$CONFIG['trusted_domains'] = array('$PRIMARY_HOSTNAME');
 
+\$CONFIG['forcessl'] = true;
+\$CONFIG['overwritewebroot'] = '/cloud';
 \$CONFIG['memcache.local'] = '\OC\Memcache\APCu';
 \$CONFIG['overwrite.cli.url'] = 'https://${PRIMARY_HOSTNAME}/cloud';
 
@@ -376,9 +368,11 @@ hide_output sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/console.php a
 # When upgrading, run the upgrade script again now that apps are enabled. It seems like
 # the first upgrade at the top won't work because apps may be disabled during upgrade?
 # Check for success (0=ok, 3=no upgrade needed).
-sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/occ upgrade
-E=$?
-if [ $E -ne 0 ] && [ $E -ne 3 ]; then exit 1; fi
+if [ "$NEXTCLOUD_UPGRADE_REQUIRED" -eq 1 ]; then
+	sudo -u www-data php"$PHP_VER" /usr/local/lib/owncloud/occ upgrade
+	E=$?
+	if [ $E -ne 0 ] && [ $E -ne 3 ]; then exit 1; fi
+fi
 
 # Disable default apps that we don't support
 sudo -u www-data \
